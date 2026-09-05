@@ -1,23 +1,37 @@
-# robot_runtime
+# robot_runtime (Raspberry Pi)
 
-On-device runtime for the Raspberry Pi voice companion.
+On-device system for the voice companion: mic capture, turn-taking, barge-in, session mirror, and cloud bridge.
 
-See [docs/robot-runtime.md](../docs/robot-runtime.md) for architecture and bridge protocol.
+See also:
 
-## Status
+- [docs/robot-runtime.md](../docs/robot-runtime.md)
+- [docs/companion-remodel.md](../docs/companion-remodel.md)
 
-Skeleton only. Next implementation slices:
+## Modules
 
-1. Config + process entry
-2. Audio capture / playback stubs
-3. Turn-taking + barge-in stubs
-4. WebSocket bridge client against cloud protocol
-5. Main interaction loop
+| Path | Role |
+|---|---|
+| `audio/` | capture / playback / AEC interfaces |
+| `vad/` | turn-taking + barge-in |
+| `session/` | interaction loop + Companion State mirror |
+| `bridge/` | WebSocket protocol + client stub |
+| `router/` | edge/cloud routing stub |
+| `runtime.py` | wires the Pi system together |
 
-## Run (placeholder)
+## Quick start on Pi
 
 ```bash
 cd robot_runtime
-# uv sync  # when pyproject is filled in
-# uv run robot-runtime
+python3 -m venv .venv
+.source .venv/bin/activate
+pip install -e .
+export ROBOT_DEVICE_ID=pi-prototype-01
+export ROBOT_CLOUD_WS_URL=wss://your-host/api/robot/v1/ws
+robot-runtime
 ```
+
+Systemd unit example: `deploy/robot-runtime.service`.
+
+## Status
+
+Skeleton system with real interfaces. Next: ALSA/PortAudio capture, real WebSocket client, cloud `/api/robot/v1` pairing.

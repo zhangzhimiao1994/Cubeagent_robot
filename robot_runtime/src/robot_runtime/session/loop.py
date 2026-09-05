@@ -19,7 +19,6 @@ class InteractionLoop:
 
     def on_speech_start(self) -> None:
         if self.state in {LoopState.IDLE, LoopState.HEARING, LoopState.SPEAKING}:
-            # SPEAKING + speech => barge-in path to be wired by audio/vad modules
             self.state = LoopState.CAPTURING
 
     def on_turn_end(self) -> None:

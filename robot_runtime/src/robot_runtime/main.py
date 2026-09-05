@@ -1,17 +1,24 @@
 from __future__ import annotations
 
+import asyncio
+
 from robot_runtime.config import RuntimeConfig
-from robot_runtime.session.loop import InteractionLoop
+from robot_runtime.runtime import RobotRuntime
+
+
+async def _amain() -> None:
+    runtime = RobotRuntime(RuntimeConfig())
+    await runtime.start()
+    print(
+        f"robot_runtime device={runtime.config.device_id} "
+        f"state={runtime.loop.state.value} cloud={runtime.config.cloud_ws_url}"
+    )
+    print("Pi system skeleton online. Wire ALSA capture next.")
+    await runtime.stop()
 
 
 def main() -> None:
-    config = RuntimeConfig(device_id="pi-prototype-01")
-    loop = InteractionLoop()
-    print(
-        f"robot_runtime {config.device_id} ready; state={loop.state.value}; "
-        f"cloud={config.cloud_ws_url}"
-    )
-    print("Wire audio/vad/bridge next; this entry is a skeleton.")
+    asyncio.run(_amain())
 
 
 if __name__ == "__main__":
