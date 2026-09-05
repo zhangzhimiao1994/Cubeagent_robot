@@ -17,7 +17,7 @@ from robot_runtime.vad import EnergyTurnTaking, SimpleBargeIn
 
 
 class RobotRuntime:
-    """On-device system wiring for Raspberry Pi companion."""
+    """Pi frontend wiring: audio + bridge only. AI stays on the agent backend."""
 
     def __init__(
         self,
@@ -33,7 +33,7 @@ class RobotRuntime:
         self.turn_taking = EnergyTurnTaking()
         self.barge_in = SimpleBargeIn()
         self.bridge = LoggingBridgeClient(self.config)
-        self.router = EdgeCloudRouter(prefer_edge_model=self.config.prefer_edge_model)
+        self.router = EdgeCloudRouter()
         self.session = LocalSession()
         self.loop = InteractionLoop()
 
@@ -46,6 +46,7 @@ class RobotRuntime:
                 type="hello",
                 payload={
                     "device_id": self.config.device_id,
+                    "role": "frontend",
                     "capabilities": ["vad", "barge_in", "pcm16"],
                 },
             )
