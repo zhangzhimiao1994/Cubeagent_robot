@@ -30,7 +30,7 @@ from agent_hub.api.errors import (
     public_error_handler,
 )
 from agent_hub.api.middleware import RequestBodyLimitMiddleware, SafeExceptionMiddleware
-from agent_hub.api.routers import admin, auth, config, runs, system, users
+from agent_hub.api.routers import admin, auth, config, robot, runs, system, users
 from agent_hub.auth.passwords import PasswordService
 from agent_hub.auth.rate_limit import RedisAuthRateLimiter
 from agent_hub.auth.service import AuthService
@@ -972,6 +972,7 @@ def create_app(
     application.router.routes.extend(runs.router.routes)
     application.router.routes.extend(admin.router.routes)
     application.router.routes.extend(users.router.routes)
+    application.router.routes.extend(robot.router.routes)
     application.router.routes.extend(
         create_lazy_feishu_webhook_router(
             gateway_provider=_feishu_gateway_from_request,
