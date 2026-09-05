@@ -12,7 +12,7 @@ Source product: Cube Agent multi-agent ops console (`agent_hub`).
 
 ## Two-layer architecture
 
-### Device: `robot_runtime` (on Pi)
+### Device: `device/robot_runtime` (on Pi)
 
 Owns the interaction loop:
 
@@ -60,7 +60,7 @@ Owns the brain:
 
 ## Phase 1 (minimum lovable companion)
 
-1. `robot_runtime` listen → turn-take → barge-in → reply loop on Pi
+1. `device/robot_runtime` listen → turn-take → barge-in → reply loop on Pi
 2. Cloud chat + Companion State API for the device bridge
 3. Wire existing memory into every companion turn; add Life Timeline write path
 4. Strip / gate multimedia generation from product surface
