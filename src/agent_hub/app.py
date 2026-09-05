@@ -1,1 +1,1 @@
-@/tmp/mcp_content_only.txt
+REPLACE_FROM_FILE
