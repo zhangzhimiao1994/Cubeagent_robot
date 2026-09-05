@@ -1,37 +1,12 @@
-# robot_runtime (Raspberry Pi)
+# Raspberry Pi frontend
 
-On-device system for the voice companion: mic capture, turn-taking, barge-in, session mirror, and cloud bridge.
+**完整中文使用说明请看：[树莓派使用说明](./README.md)**（烧录、注册设备、firstboot、联调、升级）。
 
-See also:
+简要：
 
-- [docs/robot-runtime.md](../../docs/robot-runtime.md)
-- [docs/companion-remodel.md](../../docs/companion-remodel.md)
+1. Imager 刷 Raspberry Pi OS Lite（64-bit）并开 SSH/Wi‑Fi  
+2. 后端 `POST /api/robot/v1/devices/register` 拿到 `device_token`  
+3. 派上克隆本仓后执行 `device/image/firstboot.sh`  
+4. `systemctl status robot-runtime` 确认在跑  
 
-## Modules
-
-| Path | Role |
-|---|---|
-| `audio/` | capture / playback / AEC interfaces |
-| `vad/` | turn-taking + barge-in |
-| `session/` | interaction loop + Companion State mirror |
-| `bridge/` | WebSocket protocol + client stub |
-| `router/` | edge/cloud routing stub |
-| `runtime.py` | wires the Pi system together |
-
-## Quick start on Pi
-
-```bash
-cd device/robot_runtime
-python3 -m venv .venv
-.source .venv/bin/activate
-pip install -e .
-export ROBOT_DEVICE_ID=pi-prototype-01
-export ROBOT_CLOUD_WS_URL=wss://your-host/api/robot/v1/ws
-robot-runtime
-```
-
-Systemd unit example: `deploy/robot-runtime.service`.
-
-## Status
-
-Skeleton system with real interfaces. Next: ALSA/PortAudio capture, real WebSocket client, cloud `/api/robot/v1` pairing.
+AI 只在后端；本目录是前端 runtime + 烧录脚本。
