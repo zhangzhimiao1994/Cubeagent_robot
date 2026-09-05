@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
+from agent_hub.companion.persona import DEFAULT_PERSONA
 from agent_hub.companion.types import CompanionState
 
 
@@ -17,7 +18,12 @@ class CompanionStateService:
         existing = self._states.get(key)
         if existing is not None:
             return existing
-        state = CompanionState(updated_at=datetime.now(UTC))
+        state = CompanionState(
+            persona_id=DEFAULT_PERSONA.id,
+            mood="warm",
+            scene="idle_chat",
+            updated_at=datetime.now(UTC),
+        )
         self._states[key] = state
         return state
 
