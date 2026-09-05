@@ -1,3 +1,1 @@
-"""FastAPI application factory and owned process resources."""
-
-import asyncio
+LOAD_FROM:/workspace/app-patch/app.py
