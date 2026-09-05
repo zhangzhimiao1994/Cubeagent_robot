@@ -1,0 +1,1 @@
+"""Edge/cloud routing stub."""
