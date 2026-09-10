@@ -8,6 +8,6 @@ Type=oneshot
 User=cube-robot
 Group=cube-robot
 EnvironmentFile=-/etc/cube-robot/environment
-ExecStart=/usr/local/lib/cube-robot/ota-update.sh --config /etc/cube-robot/robot.toml
+ExecStart=/usr/local/lib/cube-robot/scripts/ota-update.sh --config /etc/cube-robot/robot.toml
 NoNewPrivileges=true
 PrivateTmp=true

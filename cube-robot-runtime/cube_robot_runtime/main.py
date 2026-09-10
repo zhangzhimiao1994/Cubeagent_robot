@@ -3,6 +3,8 @@
 import argparse
 from dataclasses import dataclass
 import json
+from pathlib import Path
+import tomllib
 from typing import Sequence
 
 from cube_robot_runtime.audio.playback import PlaybackRecorder
@@ -51,6 +53,20 @@ def run_dry_run(config: RuntimeConfig, utterance: str) -> DryRunResult:
     )
 
 
+def load_runtime_config(path: Path) -> RuntimeConfig:
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
+    runtime = data.get("runtime")
+    if not isinstance(runtime, dict):
+        raise ValueError("config must contain a runtime table")
+    device_id = runtime.get("device_id")
+    server_url = runtime.get("server_url")
+    if not isinstance(device_id, str) or not device_id:
+        raise ValueError("runtime.device_id must be a non-empty string")
+    if not isinstance(server_url, str) or not server_url:
+        raise ValueError("runtime.server_url must be a non-empty string")
+    return RuntimeConfig(server_url=server_url, device_id=device_id)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -59,7 +75,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     dry_run.add_argument("--device-id", required=True)
     dry_run.add_argument("--session-id", default="dry-run-session")
     dry_run.add_argument("--utterance", required=True)
+    run = subcommands.add_parser("run")
+    run.add_argument("--config", type=Path, required=True)
     args = parser.parse_args(argv)
+    if args.command == "run":
+        config = load_runtime_config(args.config)
+        print(json.dumps({"device_id": config.device_id, "server_url": config.server_url}))
+        return 0
     result = run_dry_run(
         RuntimeConfig(args.server_url, args.device_id, args.session_id),
         args.utterance,

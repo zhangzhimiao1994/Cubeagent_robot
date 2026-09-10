@@ -9,5 +9,8 @@ description = "Standalone Raspberry Pi robot runtime"
 requires-python = ">=3.12"
 dependencies = []
 
+[project.scripts]
+cube-robot = "cube_robot_runtime.main:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["cube_robot_runtime"]

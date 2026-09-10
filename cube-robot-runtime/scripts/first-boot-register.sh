@@ -5,6 +5,9 @@ CONFIG_DIR=/etc/cube-robot
 STATE_DIR=/var/lib/cube-robot
 CONFIG_PATH="$CONFIG_DIR/robot.toml"
 DEVICE_ID_PATH="$CONFIG_DIR/device-id"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+RUNTIME_ROOT="${RUNTIME_ROOT:-$(cd -- "$SCRIPT_DIR/.." && pwd)}"
+TEMPLATE_PATH="${TEMPLATE_PATH:-$RUNTIME_ROOT/config/robot.toml.example}"
 DRY_RUN=false
 
 usage() { printf 'Usage: %s [--dry-run] [--config PATH]\n' "$0"; }
@@ -27,7 +30,7 @@ done
 if "$DRY_RUN"; then
   printf 'dry-run: would create %s and %s\n' "$CONFIG_DIR" "$STATE_DIR"
   printf 'dry-run: would create device identity at %s\n' "$DEVICE_ID_PATH"
-  printf 'dry-run: would install config at %s\n' "$CONFIG_PATH"
+  printf 'dry-run: would install template %s at %s\n' "$TEMPLATE_PATH" "$CONFIG_PATH"
   exit 0
 fi
 
@@ -39,5 +42,5 @@ if [[ ! -f "$DEVICE_ID_PATH" ]]; then
   chown cube-robot:cube-robot "$DEVICE_ID_PATH"
 fi
 if [[ ! -f "$CONFIG_PATH" ]]; then
-  install -m 0640 -o cube-robot -g cube-robot "$(dirname "$0")/../config/robot.toml.example" "$CONFIG_PATH"
+  install -m 0640 -o cube-robot -g cube-robot "$TEMPLATE_PATH" "$CONFIG_PATH"
 fi
