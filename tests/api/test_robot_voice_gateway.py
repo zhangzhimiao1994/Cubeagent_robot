@@ -7,8 +7,12 @@ from starlette.websockets import WebSocketDisconnect
 
 from agent_hub.app import create_app
 from agent_hub.auth.models import AuthenticatedPrincipal, InvalidCredentials, Role
+from agent_hub.domain.runs import RunStatus, TaskMode
 from agent_hub.robot.protocol import RobotMessageType, build_envelope
+from agent_hub.runs.service import SubmittedRun
 from agent_hub.settings import Settings
+
+ROBOT_RUN_ID = UUID("00000000-0000-4000-8000-000000000301")
 
 
 class StubAuthService:
@@ -22,12 +26,21 @@ class StubAuthService:
         )
 
 
-def _client() -> TestClient:
+def _client(
+    *,
+    run_service: object | None = None,
+    run_repository: object | None = None,
+) -> TestClient:
+    app_kwargs: dict[str, object] = {
+        "auth_service": StubAuthService(),
+        "settings": Settings(robot_device_tokens=SecretStr("pi-lab-01:robot-token")),
+    }
+    if run_service is not None:
+        app_kwargs["run_service"] = run_service
+    if run_repository is not None:
+        app_kwargs["run_repository"] = run_repository
     return TestClient(
-        create_app(
-            auth_service=StubAuthService(),
-            settings=Settings(robot_device_tokens=SecretStr("pi-lab-01:robot-token")),
-        )
+        create_app(**app_kwargs)
     )
 
 
@@ -37,6 +50,117 @@ def _headers() -> dict[str, str]:
 
 def _device_headers() -> dict[str, str]:
     return {"x-robot-device-token": "robot-token"}
+
+
+class FakeRobotRunService:
+    def __init__(self, *, status: RunStatus = RunStatus.QUEUED) -> None:
+        self.status = status
+        self.submitted: dict[str, object] = {}
+        self.executed_run_id: UUID | None = None
+
+    async def submit(
+        self,
+        *,
+        tenant_id: UUID,
+        actor_id: UUID,
+        message: str,
+        mode: TaskMode,
+        conversation_id: str | None = None,
+        channel_context: dict[str, str] | None = None,
+        idempotency_key: str | None = None,
+        **_: object,
+    ) -> SubmittedRun:
+        self.submitted = {
+            "tenant_id": tenant_id,
+            "actor_id": actor_id,
+            "message": message,
+            "mode": mode,
+            "conversation_id": conversation_id,
+            "channel_context": channel_context,
+            "idempotency_key": idempotency_key,
+        }
+        return SubmittedRun(
+            id=ROBOT_RUN_ID,
+            tenant_id=tenant_id,
+            status=self.status,
+            mode=mode,
+            decision_token="robot-choice-token" if self.status is RunStatus.WAITING_USER_MODE else None,
+            version=1,
+            conversation_id=conversation_id,
+        )
+
+    async def execute(self, run_id: UUID) -> SubmittedRun:
+        self.executed_run_id = run_id
+        return SubmittedRun(
+            id=run_id,
+            tenant_id=UUID("00000000-0000-4000-8000-000000000201"),
+            status=RunStatus.COMPLETED,
+            mode=TaskMode.AUTO,
+            decision_token=None,
+            version=2,
+            conversation_id="robot-pi-lab-01-voice-session-1",
+        )
+
+
+class WaitingRobotRunService:
+    def __init__(self) -> None:
+        self.submitted: dict[str, object] = {}
+
+    async def submit(
+        self,
+        *,
+        tenant_id: UUID,
+        actor_id: UUID,
+        message: str,
+        mode: TaskMode,
+        conversation_id: str | None = None,
+        channel_context: dict[str, str] | None = None,
+        idempotency_key: str | None = None,
+        **_: object,
+    ) -> SubmittedRun:
+        del actor_id, message, channel_context, idempotency_key
+        self.submitted = {"mode": mode, "conversation_id": conversation_id}
+        return SubmittedRun(
+            id=ROBOT_RUN_ID,
+            tenant_id=tenant_id,
+            status=RunStatus.WAITING_USER_MODE,
+            mode=mode,
+            decision_token="robot-choice-token",
+            version=1,
+            conversation_id=conversation_id,
+        )
+
+
+class FailingRobotRunService:
+    async def submit(self, **_: object) -> SubmittedRun:
+        raise RuntimeError("run service unavailable")
+
+
+class FakeRobotRunRepository:
+    def __init__(self, artifacts: tuple[dict[str, object], ...]) -> None:
+        self._artifacts = artifacts
+        self.artifact_calls: list[tuple[UUID, UUID]] = []
+
+    async def artifacts(self, tenant_id: UUID, run_id: UUID) -> tuple[dict[str, object], ...]:
+        self.artifact_calls.append((tenant_id, run_id))
+        return self._artifacts
+
+
+def _final_speech_response(
+    client: TestClient,
+    *,
+    text: str = "测试语音",
+) -> dict[str, object]:
+    with client.websocket_connect("/api/v1/robot/ws/pi-lab-01", headers=_device_headers()) as ws:
+        ws.send_json(
+            build_envelope(
+                message_type=RobotMessageType.SPEECH_PARTIAL,
+                device_id="pi-lab-01",
+                session_id="voice-session-1",
+                payload={"text": text, "is_final": True},
+            ).model_dump(mode="json")
+        )
+        return ws.receive_json()
 
 
 def test_robot_status_endpoint_requires_management_auth() -> None:
@@ -93,6 +217,55 @@ def test_robot_websocket_accepts_heartbeat_and_final_utterance() -> None:
 
     assert message["type"] == "assistant.text.done"
     assert "测试语音" in message["payload"]["text"]
+
+
+def test_robot_websocket_bridges_final_speech_to_agent_run_artifact() -> None:
+    run_service = FakeRobotRunService()
+    run_repository = FakeRobotRunRepository(
+        (
+            {
+                "id": str(UUID("00000000-0000-4000-8000-000000000401")),
+                "producer": "main_agent",
+                "content": {"text": "服务端 Agent 回复"},
+            },
+        )
+    )
+    client = _client(run_service=run_service, run_repository=run_repository)
+
+    response = _final_speech_response(client)
+
+    submitted = run_service.submitted
+    assert submitted["mode"].value == "auto"
+    assert submitted["conversation_id"] == "robot-pi-lab-01-voice-session-1"
+    assert submitted["channel_context"]["source_channel"] == "robot_voice"
+    assert submitted["channel_context"]["requested_channel_features"] == "voice,audio,robot"
+    assert run_service.executed_run_id == ROBOT_RUN_ID
+    assert response["type"] == "assistant.text.done"
+    assert response["payload"]["text"] == "服务端 Agent 回复"
+
+
+def test_robot_websocket_returns_bounded_fallback_when_run_has_no_artifact() -> None:
+    run_service = WaitingRobotRunService()
+    run_repository = FakeRobotRunRepository(())
+    client = _client(run_service=run_service, run_repository=run_repository)
+
+    response = _final_speech_response(client)
+
+    assert response["type"] == "assistant.text.done"
+    assert "我已经收到你的语音" in response["payload"]["text"]
+    assert str(ROBOT_RUN_ID) in response["payload"]["text"]
+
+
+def test_robot_websocket_returns_bounded_fallback_when_bridge_fails() -> None:
+    client = _client(
+        run_service=FailingRobotRunService(),
+        run_repository=FakeRobotRunRepository(()),
+    )
+
+    response = _final_speech_response(client)
+
+    assert response["type"] == "assistant.text.done"
+    assert "我已经收到你的语音" in response["payload"]["text"]
 
 
 def test_robot_mock_utterance_endpoint_requires_management_auth_and_returns_response() -> None:

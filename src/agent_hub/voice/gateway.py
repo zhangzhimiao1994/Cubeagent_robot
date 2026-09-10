@@ -86,7 +86,7 @@ def create_robot_voice_router(
             AuthenticatedPrincipal, Depends(require_permission("robot:use"))
         ],
     ) -> MockUtteranceResponse:
-        responses = active_registry.record(
+        responses = await active_registry.record_async(
             build_envelope(
                 message_type=RobotMessageType.SPEECH_PARTIAL,
                 device_id=request.device_id,
@@ -130,7 +130,7 @@ def create_robot_voice_router(
                 if envelope.device_id != device_id:
                     await websocket.close(code=1008)
                     return
-                for response in active_registry.record(envelope):
+                for response in await active_registry.record_async(envelope):
                     await websocket.send_json(response.model_dump(mode="json"))
         except WebSocketDisconnect:
             return

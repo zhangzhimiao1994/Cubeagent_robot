@@ -110,7 +110,7 @@ from agent_hub.scheduler.service import SchedulerService
 from agent_hub.scheduler.types import TaskRequest
 from agent_hub.security.secrets import SecretCipher, SecretService
 from agent_hub.settings import Settings, get_settings
-from agent_hub.voice.companion import CompanionResponder
+from agent_hub.voice.companion import CompanionResponder, RobotRunBridge
 from agent_hub.voice.gateway import create_robot_voice_router
 
 ReadinessProbe = Callable[[], Awaitable[None]]
@@ -671,6 +671,7 @@ def create_app(
     runtime_registry: RuntimeRegistry | None = None,
     mode_router: ModeRouterProtocol | None = None,
     task_queue: TaskQueue | None = None,
+    run_repository: object | None = None,
     feishu_gateway: ChannelGatewayProtocol | None = None,
     feishu_websocket_client_factory: FeishuWebSocketClientFactoryForSettings | None = None,
     database_factory: Callable[[str], DatabaseResource] = build_database,
@@ -690,6 +691,7 @@ def create_app(
         active_redis = redis_client
         active_sessions = session_factory
         active_mode_router = mode_router
+        active_run_repository = run_repository
         cleanup_callbacks: list[CleanupCallback] = []
         token_service = (
             AccessTokenService(configured.jwt_signing_key_value()) if auth_service is None else None
@@ -747,12 +749,15 @@ def create_app(
                     active_sessions,
                     SecretCipher(configured.master_key_bytes()),
                 )
+            if active_run_repository is None and active_sessions is not None:
+                active_run_repository = RunRepository(active_sessions)
+            application.state.run_repository = active_run_repository
             if admin_resource_service is None and active_sessions is not None:
                 assert active_secret_service is not None
                 application.state.admin_resource_service = admin.PersistentAdminResourceService(
                     config_service=ConfigService(active_sessions),
                     secret_service=active_secret_service,
-                    run_repository=RunRepository(active_sessions),
+                    run_repository=cast(RunRepository, active_run_repository),
                     tenant_id=configured.bootstrap_tenant_id,
                     actor_id=configured.bootstrap_tenant_id,
                     session_factory=active_sessions,
@@ -794,7 +799,7 @@ def create_app(
                     )
                 queue = task_queue if task_queue is not None else InProcessRunQueue()
                 application.state.run_service = RunService(
-                    RunRepository(active_sessions),
+                    cast(RunRepository, active_run_repository),
                     runtime_registry=active_runtime_registry,
                     router=active_mode_router,
                     task_queue=queue,
@@ -846,7 +851,7 @@ def create_app(
                 )
             if active_sessions is not None:
                 application.state.feishu_reply_dispatcher = FeishuRunReplyDispatcher(
-                    run_repository=RunRepository(active_sessions),
+                    run_repository=cast(RunRepository, active_run_repository),
                     sender=FeishuOpenAPIReplySender(),
                 )
             if active_secret_service is not None and active_redis is not None:
@@ -903,6 +908,16 @@ def create_app(
                 application.state.database_probe = _database_probe(active_sessions)
             if redis_probe is None and active_redis is not None:
                 application.state.redis_probe = _redis_probe(active_redis)
+            if (
+                getattr(application.state, "run_service", None) is not None
+                and active_run_repository is not None
+            ):
+                application.state.robot_run_bridge = RobotRunBridge(
+                    run_service=cast(Any, application.state.run_service),
+                    run_repository=cast(Any, active_run_repository),
+                    tenant_id=configured.bootstrap_tenant_id,
+                    actor_id=configured.bootstrap_tenant_id,
+                )
             if configured.litellm_health_url is not None:
                 extra_checks = dict(application.state.extra_readiness_checks)
                 extra_checks["litellm"] = _http_readiness_probe(
@@ -935,6 +950,7 @@ def create_app(
     application.state.session_factory = session_factory
     application.state.bootstrap_tenant_id = configured_settings.bootstrap_tenant_id
     application.state.run_service = run_service
+    application.state.run_repository = run_repository
     application.state.runtime_registry = active_runtime_registry
     application.state.mode_router = mode_router
     application.state.run_queue = task_queue
@@ -945,9 +961,34 @@ def create_app(
     application.state.feishu_websocket_connector = None
     application.state.feishu_websocket_task = None
     application.state.multimedia_generation_executor = None
-    robot_responder = CompanionResponder()
+    robot_fallback_responder = CompanionResponder()
+    application.state.robot_run_bridge = (
+        RobotRunBridge(
+            run_service=cast(Any, run_service),
+            run_repository=cast(Any, run_repository),
+            tenant_id=configured_settings.bootstrap_tenant_id,
+            actor_id=configured_settings.bootstrap_tenant_id,
+        )
+        if run_service is not None and run_repository is not None
+        else None
+    )
+
+    async def respond_robot_text(utterance: str, *, device_id: str, session_id: str) -> str:
+        bridge = getattr(application.state, "robot_run_bridge", None)
+        if isinstance(bridge, RobotRunBridge):
+            return await bridge.respond_text(
+                utterance,
+                device_id=device_id,
+                session_id=session_id,
+            )
+        return robot_fallback_responder.respond_text(
+            utterance,
+            device_id=device_id,
+            session_id=session_id,
+        )
+
     application.state.robot_session_registry = RobotSessionRegistry(
-        responder=robot_responder.respond_text
+        responder=respond_robot_text
     )
     robot_device_tokens = (
         configured_settings.robot_device_tokens
@@ -1007,7 +1048,6 @@ def create_app(
     application.router.routes.extend(
         create_robot_voice_router(
             registry=application.state.robot_session_registry,
-            responder=robot_responder,
             device_tokens=application.state.robot_device_tokens,
         ).routes
     )

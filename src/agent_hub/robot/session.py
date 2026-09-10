@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from enum import StrEnum
+from inspect import isawaitable
+from typing import cast
 
 from pydantic import BaseModel, ConfigDict
 
@@ -32,7 +34,8 @@ class RobotStatusSnapshot(BaseModel):
     devices: tuple[RobotDeviceStatus, ...]
 
 
-CompanionResponse = Callable[..., str]
+RobotTextResponder = Callable[..., str | Awaitable[str]]
+CompanionResponse = RobotTextResponder
 
 
 class RobotSessionRegistry:
@@ -49,6 +52,32 @@ class RobotSessionRegistry:
         self._devices: dict[str, RobotDeviceStatus] = {}
 
     def record(self, envelope: RobotEnvelope) -> tuple[RobotEnvelope, ...]:
+        utterance = self._record_input(envelope)
+        if utterance is None:
+            return ()
+        response_text = self._responder(
+            utterance,
+            device_id=envelope.device_id,
+            session_id=envelope.session_id,
+        )
+        if isawaitable(response_text):
+            raise RuntimeError("async robot responder requires record_async")
+        return self._complete_turn(envelope, cast(str, response_text))
+
+    async def record_async(self, envelope: RobotEnvelope) -> tuple[RobotEnvelope, ...]:
+        utterance = self._record_input(envelope)
+        if utterance is None:
+            return ()
+        response_text = self._responder(
+            utterance,
+            device_id=envelope.device_id,
+            session_id=envelope.session_id,
+        )
+        if isawaitable(response_text):
+            response_text = await response_text
+        return self._complete_turn(envelope, response_text)
+
+    def _record_input(self, envelope: RobotEnvelope) -> str | None:
         current = self._devices.get(envelope.device_id)
         state = _state_after(
             envelope, current.state if current is not None else RobotSessionState.IDLE
@@ -72,16 +101,14 @@ class RobotSessionRegistry:
             envelope.type is not RobotMessageType.SPEECH_PARTIAL
             or envelope.payload.get("is_final") is not True
         ):
-            return ()
+            return None
 
         utterance = _payload_string(envelope.payload, "text")
         if utterance is None:
-            return ()
-        response_text = self._responder(
-            utterance,
-            device_id=envelope.device_id,
-            session_id=envelope.session_id,
-        )
+            return None
+        return utterance
+
+    def _complete_turn(self, envelope: RobotEnvelope, response_text: str) -> tuple[RobotEnvelope, ...]:
         self._devices[envelope.device_id] = self._devices[envelope.device_id].model_copy(
             update={"state": RobotSessionState.IDLE}
         )
