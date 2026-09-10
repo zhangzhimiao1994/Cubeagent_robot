@@ -4,6 +4,8 @@ import argparse
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import signal
+from threading import Event
 import tomllib
 from typing import Sequence
 
@@ -67,6 +69,15 @@ def load_runtime_config(path: Path) -> RuntimeConfig:
     return RuntimeConfig(server_url=server_url, device_id=device_id)
 
 
+def run_runtime(config: RuntimeConfig, *, once: bool, stop_event: Event) -> int:
+    while not stop_event.is_set():
+        print(json.dumps({"type": "device.heartbeat", "device_id": config.device_id}))
+        if once:
+            return 0
+        stop_event.wait(timeout=30)
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -77,11 +88,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     dry_run.add_argument("--utterance", required=True)
     run = subcommands.add_parser("run")
     run.add_argument("--config", type=Path, required=True)
+    run.add_argument("--once", action="store_true")
     args = parser.parse_args(argv)
     if args.command == "run":
         config = load_runtime_config(args.config)
-        print(json.dumps({"device_id": config.device_id, "server_url": config.server_url}))
-        return 0
+        stop_event = Event()
+
+        def request_stop(_signum: int, _frame: object) -> None:
+            stop_event.set()
+
+        handled_signals = (signal.SIGTERM, signal.SIGINT)
+        previous_handlers = {signum: signal.signal(signum, request_stop) for signum in handled_signals}
+        try:
+            return run_runtime(config, once=args.once, stop_event=stop_event)
+        except KeyboardInterrupt:
+            return 0
+        finally:
+            for signum, previous_handler in previous_handlers.items():
+                signal.signal(signum, previous_handler)
     result = run_dry_run(
         RuntimeConfig(args.server_url, args.device_id, args.session_id),
         args.utterance,

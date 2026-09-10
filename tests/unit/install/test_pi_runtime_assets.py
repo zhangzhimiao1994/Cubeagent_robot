@@ -1,6 +1,11 @@
+import os
 from pathlib import Path
 import shlex
+import subprocess
+import sys
 import tomllib
+
+import pytest
 
 from cube_robot_runtime.main import main
 
@@ -48,7 +53,7 @@ def test_runtime_service_entry_point_accepts_run_config(tmp_path: Path, capsys) 
         "[runtime]\ndevice_id = 'pi-lab-01'\nserver_url = 'mock://robot'\n",
         encoding="utf-8",
     )
-    assert main(["run", "--config", str(config)]) == 0
+    assert main(["run", "--config", str(config), "--once"]) == 0
     assert "pi-lab-01" in capsys.readouterr().out
 
     service = (root / "scripts" / "cube-robot.service").read_text(encoding="utf-8")
@@ -57,17 +62,38 @@ def test_runtime_service_entry_point_accepts_run_config(tmp_path: Path, capsys) 
     assert command[-3:] == ["run", "--config", "/etc/cube-robot/robot.toml"]
 
 
+def test_runtime_service_command_stays_running_without_once(tmp_path: Path) -> None:
+    config = tmp_path / "robot.toml"
+    config.write_text(
+        "[runtime]\ndevice_id = 'pi-lab-01'\nserver_url = 'mock://robot'\n",
+        encoding="utf-8",
+    )
+    environment = os.environ | {"PYTHONPATH": str(Path("cube-robot-runtime").resolve())}
+    process = subprocess.Popen(
+        [sys.executable, "-m", "cube_robot_runtime.main", "run", "--config", str(config)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        env=environment,
+    )
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            process.wait(timeout=0.5)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        process.wait(timeout=5)
+
+
 def test_ota_dry_run_uses_bootstrap_python_without_current_release() -> None:
     script = (Path("cube-robot-runtime") / "scripts" / "ota-update.sh").read_text(encoding="utf-8")
-    assert "PYTHON_BIN" in script
-    assert 'if "$DRY_RUN"' in script
-    assert "python3" in script
-    assert "current/bin/python" in script
+    bootstrap_branch = script.split('if "$DRY_RUN"; then', 1)[1].split("  else", 1)[0]
+    assert "PYTHON_BIN" in bootstrap_branch
+    assert "python3" in bootstrap_branch
+    assert "current/bin/python" not in bootstrap_branch
 
 
 def test_first_boot_template_path_has_stable_override() -> None:
     script = (Path("cube-robot-runtime") / "scripts" / "first-boot-register.sh").read_text(encoding="utf-8")
     assert "RUNTIME_ROOT" in script
-    assert "TEMPLATE_PATH" in script
-    assert "robot.toml.example" in script
-    assert '"$TEMPLATE_PATH"' in script
+    assert 'TEMPLATE_PATH="${TEMPLATE_PATH:-$RUNTIME_ROOT/config/robot.toml.example}"' in script
+    assert 'install -m 0640 -o cube-robot -g cube-robot "$TEMPLATE_PATH" "$CONFIG_PATH"' in script
