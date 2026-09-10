@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from agent_hub.cognition.types import CognitiveEpisode, EpisodeOutcome, EpisodeSignal
 
@@ -25,6 +25,7 @@ class LearningGateReason(StrEnum):
     LOW_VALUE_CHAT = "low_value_chat"
     UNSAFE_CONTENT = "unsafe_content"
     LOW_CONFIDENCE_ASR = "low_confidence_asr"
+    MISSING_EVIDENCE = "missing_evidence"
 
 
 class LearningGateDecision(BaseModel):
@@ -32,7 +33,7 @@ class LearningGateDecision(BaseModel):
 
     accepted: bool
     reason: LearningGateReason
-    confidence: float
+    confidence: float = Field(ge=0, le=1)
 
 
 def rejects_unsafe_text(text: str) -> bool:
@@ -43,10 +44,25 @@ def rejects_unsafe_text(text: str) -> bool:
 
 
 def learning_gate_decision(episode: CognitiveEpisode) -> LearningGateDecision:
-    if rejects_unsafe_text(episode.summary) or rejects_unsafe_text(episode.feedback):
+    if episode.privacy_level in {"sensitive", "private"}:
+        return LearningGateDecision(accepted=False, reason=LearningGateReason.UNSAFE_CONTENT, confidence=1.0)
+    if (
+        rejects_unsafe_text(episode.summary)
+        or rejects_unsafe_text(episode.feedback)
+        or any(rejects_unsafe_text(evidence.summary) for evidence in episode.evidence_refs)
+    ):
         return LearningGateDecision(accepted=False, reason=LearningGateReason.UNSAFE_CONTENT, confidence=1.0)
     if EpisodeSignal.SPEECH_RECOGNITION_UNCERTAIN in episode.signals and len(episode.signals) == 1:
         return LearningGateDecision(accepted=False, reason=LearningGateReason.LOW_CONFIDENCE_ASR, confidence=0.85)
+    if (
+        EpisodeSignal.USER_CORRECTED in episode.signals
+        or EpisodeSignal.USER_REJECTED in episode.signals
+        or EpisodeSignal.USER_SATISFIED in episode.signals
+        or episode.outcome in {EpisodeOutcome.SUCCESS, EpisodeOutcome.FAILURE}
+        or EpisodeSignal.REPEATED_PATTERN in episode.signals
+        or EpisodeSignal.USER_REPEATED_QUESTION in episode.signals
+    ) and not episode.evidence_refs:
+        return LearningGateDecision(accepted=False, reason=LearningGateReason.MISSING_EVIDENCE, confidence=1.0)
     if EpisodeSignal.USER_CORRECTED in episode.signals:
         return LearningGateDecision(accepted=True, reason=LearningGateReason.USER_CORRECTION, confidence=0.9)
     if EpisodeSignal.USER_REJECTED in episode.signals:

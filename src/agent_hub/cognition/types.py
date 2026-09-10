@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Annotated
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+BoundedNote = Annotated[str, Field(min_length=1, max_length=500)]
 
 
 class CognitiveSource(StrEnum):
@@ -165,6 +168,9 @@ class ReflectionRecord(BaseModel):
     candidate_skill_updates: tuple[str, ...] = Field(default_factory=tuple, max_length=16)
     confidence: float = Field(default=0.5, ge=0, le=1)
     requires_approval: bool = False
+    evidence_refs: tuple[EvidenceRef, ...] = Field(min_length=1, max_length=16)
+    status: CognitiveRecordStatus = CognitiveRecordStatus.CANDIDATE
+    version: int = Field(default=1, ge=1)
     created_at: datetime = Field(default_factory=lambda: datetime.now().astimezone())
 
 
@@ -199,11 +205,14 @@ class RelationshipState(BaseModel):
     preferred_tone: str = Field(default="direct", max_length=128)
     preferred_depth: str = Field(default="balanced", pattern=r"^(concise|balanced|detailed)$")
     interaction_rhythm: str = Field(default="user_led", max_length=128)
-    shared_history: tuple[str, ...] = Field(default_factory=tuple, max_length=32)
-    stable_preferences: tuple[str, ...] = Field(default_factory=tuple, max_length=32)
-    recent_changes: tuple[str, ...] = Field(default_factory=tuple, max_length=32)
-    boundaries: tuple[str, ...] = Field(default_factory=tuple, max_length=32)
-    evidence_refs: tuple[EvidenceRef, ...] = Field(default_factory=tuple, max_length=32)
+    shared_history: tuple[BoundedNote, ...] = Field(default_factory=tuple, max_length=32)
+    stable_preferences: tuple[BoundedNote, ...] = Field(default_factory=tuple, max_length=32)
+    recent_changes: tuple[BoundedNote, ...] = Field(default_factory=tuple, max_length=32)
+    boundaries: tuple[BoundedNote, ...] = Field(default_factory=tuple, max_length=32)
+    confidence: float = Field(default=0.5, ge=0, le=1)
+    status: CognitiveRecordStatus = CognitiveRecordStatus.ACTIVE
+    version: int = Field(default=1, ge=1)
+    evidence_refs: tuple[EvidenceRef, ...] = Field(min_length=1, max_length=32)
     last_updated_at: datetime = Field(default_factory=lambda: datetime.now().astimezone())
 
 
@@ -223,6 +232,7 @@ class WorldStateItem(BaseModel):
     participants: tuple[str, ...] = Field(default_factory=tuple, max_length=32)
     evidence_refs: tuple[EvidenceRef, ...] = Field(min_length=1, max_length=16)
     confidence: float = Field(default=0.5, ge=0, le=1)
+    version: int = Field(default=1, ge=1)
     last_verified_at: datetime | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now().astimezone())
     updated_at: datetime = Field(default_factory=lambda: datetime.now().astimezone())
@@ -240,6 +250,9 @@ class SelfModelRecord(BaseModel):
     shared_story: tuple[str, ...] = Field(default_factory=tuple, max_length=32)
     version: int = Field(default=1, ge=1)
     protected: bool = True
+    confidence: float = Field(default=1.0, ge=0, le=1)
+    evidence_refs: tuple[EvidenceRef, ...] = Field(min_length=1, max_length=16)
+    status: CognitiveRecordStatus = CognitiveRecordStatus.ACTIVE
     updated_at: datetime = Field(default_factory=lambda: datetime.now().astimezone())
 
 
