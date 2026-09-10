@@ -194,8 +194,9 @@ class WorldStateService:
 
         item = _world_state_from_payload(payload)
         now = _advanced_now(item.updated_at)
-        updated = item.model_copy(
-            update={
+        updated = WorldStateItem.model_validate(
+            {
+                **item.model_dump(mode="json"),
                 "status": status,
                 "evidence_refs": (*item.evidence_refs, evidence),
                 "last_verified_at": now,

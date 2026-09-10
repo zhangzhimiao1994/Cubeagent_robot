@@ -1,6 +1,7 @@
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from agent_hub.cognition.repository import InMemoryCognitionRepository
 from agent_hub.cognition.state import (
@@ -257,6 +258,31 @@ async def test_world_state_mark_status_missing_item_raises_lookup_error() -> Non
 
     with pytest.raises(LookupError, match="world state"):
         await service.mark_status(uuid4(), "completed", _evidence())
+
+
+@pytest.mark.asyncio
+async def test_world_state_mark_status_rejects_invalid_status_without_persisting() -> None:
+    tenant_id, user_id, repository = _repository()
+    service = WorldStateService(repository)
+    item = WorldStateItem(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        entity_type=WorldEntityType.TASK,
+        name="Deploy cognitive layer",
+        state="Needs focused verification",
+        evidence_refs=(_evidence("exp-1"),),
+    )
+    await service.upsert_item(item)
+
+    with pytest.raises(ValidationError, match="status"):
+        await service.mark_status(item.id, "blocked", _evidence("exp-2", "invalid status"))
+
+    persisted = await repository.get("world_state", str(item.id))
+
+    assert persisted is not None
+    assert persisted["status"] == "active"
+    assert persisted["version"] == 1
+    assert persisted["evidence_refs"] == [_evidence("exp-1").model_dump(mode="json")]
 
 
 @pytest.mark.asyncio
