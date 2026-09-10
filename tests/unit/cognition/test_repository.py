@@ -2,7 +2,7 @@ from uuid import uuid4
 
 import pytest
 
-from agent_hub.cognition.repository import InMemoryCognitionRepository
+from agent_hub.cognition.repository import InMemoryCognitionRepository, _resource_id
 
 
 @pytest.mark.asyncio
@@ -66,3 +66,32 @@ async def test_in_memory_repository_upserts_lists_and_deletes() -> None:
     assert await repository.delete("experience", "exp-1") is True
     assert await repository.delete("experience", "exp-1") is False
     assert await repository.get("experience", "exp-1") is None
+
+
+def test_sql_resource_id_has_fixed_safe_length() -> None:
+    user_id = uuid4()
+
+    short = _resource_id(user_id, "experience", "exp-1")
+    longest = _resource_id(user_id, "x" * 64, "x" * 200)
+
+    assert short.startswith("cognition:")
+    assert len(short) == len(longest) == 74
+    assert len(short) < 128
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("record_type", ["", "Experience", "bad type", "x" * 65])
+async def test_in_memory_repository_rejects_invalid_record_types(record_type: str) -> None:
+    repository = InMemoryCognitionRepository(tenant_id=uuid4(), user_id=uuid4())
+
+    with pytest.raises(ValueError, match="record_type"):
+        await repository.upsert(record_type, "exp-1", {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("record_id", ["", " exp-1", "exp-1 ", "x" * 201])
+async def test_in_memory_repository_rejects_invalid_record_ids(record_id: str) -> None:
+    repository = InMemoryCognitionRepository(tenant_id=uuid4(), user_id=uuid4())
+
+    with pytest.raises(ValueError, match="record_id"):
+        await repository.upsert("experience", record_id, {})
