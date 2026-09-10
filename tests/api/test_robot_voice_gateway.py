@@ -397,6 +397,19 @@ def test_robot_ota_manifest_requires_bound_device_token() -> None:
     assert body["decision"]["status"] in {"update_available", "up_to_date", "downgrade_blocked"}
 
 
+def test_robot_ota_manifest_rejects_invalid_current_version_without_500() -> None:
+    client = _client()
+
+    response = client.get(
+        "/api/v1/robot/ota/manifest/pi-lab-01",
+        headers=_device_headers(),
+        params={"current_version": "probe", "protocol_version": "1"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "request_validation"
+
+
 def test_robot_device_tokens_are_loaded_from_environment_when_settings_are_not_injected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

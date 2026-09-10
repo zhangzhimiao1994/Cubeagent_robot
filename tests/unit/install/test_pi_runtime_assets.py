@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from typing import Self
 
 import pytest
 from cube_robot_runtime.main import load_runtime_config, main
@@ -81,6 +82,48 @@ def test_robot_voice_probe_checks_login_path_and_bypasses_proxies_by_default() -
         "http_no_proxy": ["*"],
     }
     assert module.websocket_proxy_options(False) == {}
+
+
+def test_robot_voice_probe_uses_valid_default_ota_version() -> None:
+    probe_path = Path("tools") / "robot_voice_probe.py"
+    spec = importlib.util.spec_from_file_location("robot_voice_probe_version_test", probe_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    captured: dict[str, str] = {}
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return b'{"decision":{"status":"update_available"}}'
+
+    def fake_open_http(request: object, *, timeout_seconds: float, no_proxy: bool) -> FakeResponse:
+        del timeout_seconds, no_proxy
+        captured["url"] = request.full_url
+        return FakeResponse()
+
+    module.open_http = fake_open_http
+
+    result = module.probe_ota_manifest(
+        base_url="http://103.236.93.62:32020",
+        device_id="pi-lab-01",
+        device_token="placeholder",
+        timeout_seconds=1,
+        no_proxy=True,
+    )
+
+    assert result["ok"] is True
+    assert "current_version=2026.09.10%2B0" in captured["url"]
+    assert "current_version=probe" not in captured["url"]
 
 
 def test_robot_voice_probe_waits_for_final_assistant_websocket_frame() -> None:

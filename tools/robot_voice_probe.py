@@ -21,6 +21,7 @@ ROBOT_WS_PREFIX = "/api/v1/robot/ws/"
 ROBOT_OTA_PREFIX = "/api/v1/robot/ota/manifest/"
 LOGIN_PATH = "/api/v1/auth/login"
 BODY_LIMIT = 700
+PROBE_CURRENT_VERSION = "2026.09.10+0"
 LOGIN_REACHABLE_STATUS_CODES = {400, 401, 403, 422, 429}
 
 
@@ -124,7 +125,7 @@ def probe_ota_manifest(
     timeout_seconds: float,
     no_proxy: bool,
 ) -> dict[str, Any]:
-    query = urlencode({"current_version": "probe", "protocol_version": "1"})
+    query = urlencode({"current_version": PROBE_CURRENT_VERSION, "protocol_version": "1"})
     url = f"{http_base_url(base_url)}{ROBOT_OTA_PREFIX}{quote(device_id, safe='')}?{query}"
     request = Request(url, headers={"X-Robot-Device-Token": device_token})
     try:

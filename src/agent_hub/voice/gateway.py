@@ -109,13 +109,22 @@ def create_robot_voice_router(
         protocol_version: str = "1",
     ) -> OtaManifestResponse:
         _require_device_token(active_device_tokens, device_id, token_header or token_query)
-        return OtaManifestResponse(
-            manifest=active_ota_manifest,
-            decision=validate_manifest_for_device(
+        try:
+            decision = validate_manifest_for_device(
                 active_ota_manifest,
                 protocol_version=protocol_version,
                 current_version=current_version,
-            ),
+            )
+        except ValueError as error:
+            raise PublicAPIError(
+                422,
+                "request_validation",
+                "request validation failed",
+                details={"reason": str(error)},
+            ) from error
+        return OtaManifestResponse(
+            manifest=active_ota_manifest,
+            decision=decision,
         )
 
     @router.websocket("/ws/{device_id}")
