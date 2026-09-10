@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping
+from hashlib import sha256
 from typing import Protocol
 from uuid import UUID
 
@@ -77,7 +78,7 @@ class AdminResourceCognitionRepository:
         normalized = _payload(record_type, record_id, payload)
         normalized["tenant_id"] = str(self._tenant_id)
         normalized["user_id"] = str(self._user_id)
-        resource_id = _resource_id(record_type, record_id)
+        resource_id = _resource_id(self._user_id, record_type, record_id)
         async with self._session_factory() as session:
             row = await session.scalar(
                 select(AdminResourceRow)
@@ -105,7 +106,10 @@ class AdminResourceCognitionRepository:
                 select(AdminResourceRow)
                 .where(AdminResourceRow.tenant_id == self._tenant_id)
                 .where(AdminResourceRow.kind == "cognition")
-                .where(AdminResourceRow.resource_id == _resource_id(record_type, record_id))
+                .where(
+                    AdminResourceRow.resource_id
+                    == _resource_id(self._user_id, record_type, record_id)
+                )
             )
         if row is None or row.payload.get("user_id") != str(self._user_id):
             return None
@@ -129,7 +133,7 @@ class AdminResourceCognitionRepository:
         )
 
     async def delete(self, record_type: str, record_id: str) -> bool:
-        resource_id = _resource_id(record_type, record_id)
+        resource_id = _resource_id(self._user_id, record_type, record_id)
         async with self._session_factory() as session:
             row = await session.scalar(
                 select(AdminResourceRow)
@@ -151,5 +155,6 @@ def _payload(record_type: str, record_id: str, payload: Mapping[str, object]) ->
     return normalized
 
 
-def _resource_id(record_type: str, record_id: str) -> str:
-    return f"{record_type}:{record_id}"
+def _resource_id(user_id: UUID, record_type: str, record_id: str) -> str:
+    identity = f"{user_id}:{record_type}:{record_id}".encode()
+    return f"{record_type}:{sha256(identity).hexdigest()[:48]}"

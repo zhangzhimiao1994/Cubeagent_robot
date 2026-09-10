@@ -26,8 +26,10 @@ async def test_admin_resource_repository_persists_user_scoped_cognition_records(
         user_id=other_user_id,
     )
     payload = {"statement": "Use concise voice replies."}
+    other_payload = {"statement": "Use detailed written replies."}
 
     stored = await repository.upsert("experience", "exp-1", payload)
+    other_stored = await other_repository.upsert("experience", "exp-1", other_payload)
 
     assert stored == {
         "record_type": "experience",
@@ -37,8 +39,15 @@ async def test_admin_resource_repository_persists_user_scoped_cognition_records(
         "user_id": str(user_id),
     }
     assert await repository.get("experience", "exp-1") == stored
-    assert await other_repository.get("experience", "exp-1") is None
-    assert await other_repository.list() == ()
+    assert await other_repository.get("experience", "exp-1") == other_stored
+    assert other_stored == {
+        "record_type": "experience",
+        "id": "exp-1",
+        "statement": "Use detailed written replies.",
+        "tenant_id": str(tenant_id),
+        "user_id": str(other_user_id),
+    }
+    assert await other_repository.list() == (other_stored,)
 
     await repository.upsert("belief", "belief-1", {"subject": "user"})
     assert [record["id"] for record in await repository.list()] == ["exp-1", "belief-1"]
@@ -53,15 +62,21 @@ async def test_admin_resource_repository_persists_user_scoped_cognition_records(
     )
 
     async with auth_session_factory() as session:
-        row = await session.scalar(
-            select(AdminResourceRow).where(
-                AdminResourceRow.tenant_id == tenant_id,
-                AdminResourceRow.kind == "cognition",
-                AdminResourceRow.resource_id == "experience:exp-1",
+        rows = list(
+            await session.scalars(
+                select(AdminResourceRow).where(
+                    AdminResourceRow.tenant_id == tenant_id,
+                    AdminResourceRow.kind == "cognition",
+                )
             )
         )
-    assert row is not None
-    assert row.payload == stored
+    experience_rows = [row for row in rows if row.payload["record_type"] == "experience"]
+    assert len(experience_rows) == 2
+    assert {row.payload["user_id"] for row in experience_rows} == {
+        str(user_id),
+        str(other_user_id),
+    }
+    assert len({row.resource_id for row in experience_rows}) == 2
 
     assert await repository.delete("experience", "exp-1") is True
     assert await repository.delete("experience", "exp-1") is False
