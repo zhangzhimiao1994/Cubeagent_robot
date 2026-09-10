@@ -128,18 +128,19 @@ class AdminResourceCognitionRepository:
         if record_type is not None:
             record_type = _record_type(record_type)
         async with self._session_factory() as session:
+            query = (
+                select(AdminResourceRow)
+                .where(AdminResourceRow.tenant_id == self._tenant_id)
+                .where(AdminResourceRow.kind == "cognition")
+                .where(AdminResourceRow.payload["user_id"].astext == str(self._user_id))
+            )
+            if record_type is not None:
+                query = query.where(
+                    AdminResourceRow.payload["record_type"].astext == record_type
+                )
             rows = list(
                 await session.scalars(
-                    select(AdminResourceRow)
-                    .where(AdminResourceRow.tenant_id == self._tenant_id)
-                    .where(AdminResourceRow.kind == "cognition")
-                    .where(AdminResourceRow.payload["user_id"].astext == str(self._user_id))
-                    .where(
-                        AdminResourceRow.payload["record_type"].astext == record_type
-                        if record_type is not None
-                        else True
-                    )
-                    .order_by(AdminResourceRow.created_at, AdminResourceRow.resource_id)
+                    query.order_by(AdminResourceRow.created_at, AdminResourceRow.resource_id)
                 )
             )
         return tuple(
