@@ -44,6 +44,10 @@ from agent_hub.runtime.artifacts import (
     ArtifactRepositoryError,
     InMemoryArtifactRepository,
 )
+from agent_hub.runtime.cognitive_context import (
+    cognitive_context_text_from_artifacts,
+    source_artifacts_without_cognitive_context,
+)
 from agent_hub.runtime.contracts import (
     Artifact,
     EventKind,
@@ -1235,7 +1239,7 @@ class CrewDispatchRuntime:
                     return
             initial_artifacts = tuple(
                 artifact
-                for artifact in context.artifacts
+                for artifact in source_artifacts_without_cognitive_context(context.artifacts)
                 if str(artifact.id) not in artifact_registry
             )
             steps = {step.id: step for step in plan.steps}
@@ -2102,6 +2106,9 @@ class CrewDispatchRuntime:
             hermes_context = hermes_memory_context_text(context.routing_decision)
             if hermes_context:
                 user["hermes_memory_context"] = hermes_context
+            cognitive_context = cognitive_context_text_from_artifacts(context.artifacts)
+            if cognitive_context:
+                user["cognitive_context"] = cognitive_context
             if feedback is not None:
                 user["untrusted_reviewer_feedback"] = feedback
             if compact_retry:

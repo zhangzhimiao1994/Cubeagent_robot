@@ -67,6 +67,10 @@ from agent_hub.runtime.artifacts import (
     InMemoryArtifactRepository,
 )
 from agent_hub.runtime.autogen.termination import CompositeDiscussionTermination, DiscussionUsage
+from agent_hub.runtime.cognitive_context import (
+    cognitive_context_text_from_artifacts,
+    source_artifacts_without_cognitive_context,
+)
 from agent_hub.runtime.contracts import (
     Artifact,
     EventKind,
@@ -1542,9 +1546,10 @@ class AutoGenDiscussionRuntime:
     def _task_text(context: TaskContext, transcript: tuple[Artifact, ...] = ()) -> str:
         artifacts = "\n".join(
             f"Artifact {item.id} ({item.type}, {item.producer}): {json.dumps(_artifact_prompt_content(item), ensure_ascii=False, sort_keys=True)}"
-            for item in context.artifacts
+            for item in source_artifacts_without_cognitive_context(context.artifacts)
         )
         hermes_context = hermes_memory_context_text(context.routing_decision)
+        cognitive_context = cognitive_context_text_from_artifacts(context.artifacts)
         task = (
             context.request
             if not artifacts
@@ -1552,6 +1557,8 @@ class AutoGenDiscussionRuntime:
         )
         if hermes_context:
             task = f"{task}\n\n{hermes_context}"
+        if cognitive_context:
+            task = f"{task}\n\n{cognitive_context}"
         prior = "\n".join(
             f"{item.producer}: {cast(str, item.content['text'])}" for item in transcript
         )

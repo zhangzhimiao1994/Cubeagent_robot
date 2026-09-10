@@ -13,12 +13,19 @@ from decimal import Decimal
 from typing import Protocol, cast
 from uuid import UUID, uuid4
 
+from agent_hub.cognition.runtime import (
+    CognitiveAdvisorProtocol,
+    CognitiveOutcomeIngestProtocol,
+    safe_cognitive_context_text,
+    safe_cognitive_outcome_ingest,
+)
 from agent_hub.context.builder import ContextBuildInput, estimate_tokens
 from agent_hub.context.compaction import ContextCompactor
 from agent_hub.domain.runs import RunStatus, TaskMode
 from agent_hub.routing.types import EXECUTABLE_MODES, RiskLevel, RouteAssessment, RouteDecision
 from agent_hub.runs.observer import ObserverDecision, ObserverPolicy, RunMonitor
 from agent_hub.runs.repository import RunAlreadyActive, RunRecord, RunRepository
+from agent_hub.runtime.cognitive_context import cognitive_context_artifact
 from agent_hub.runtime.contracts import Artifact, EventKind, JsonValue, TaskContext
 from agent_hub.runtime.failure_reason import (
     safe_runtime_failure_diagnostic,
@@ -307,6 +314,8 @@ class RunService:
         router: ModeRouterProtocol | None,
         task_queue: TaskQueue,
         hermes_advisor: HermesAdvisorProtocol | None = None,
+        cognitive_advisor: CognitiveAdvisorProtocol | None = None,
+        cognitive_outcome_ingester: CognitiveOutcomeIngestProtocol | None = None,
         temporary_agent_policy: TemporaryAgentPolicyProtocol | None = None,
         runtime_timeout_seconds: float = 300.0,
         runtime_token_budget: int = 1_000_000,
@@ -319,6 +328,8 @@ class RunService:
         self._router = router
         self._queue = task_queue
         self._hermes_advisor = hermes_advisor
+        self._cognitive_advisor = cognitive_advisor
+        self._cognitive_outcome_ingester = cognitive_outcome_ingester
         self._temporary_agent_policy = temporary_agent_policy
         self._runtime_timeout_seconds = _runtime_timeout_seconds(
             TaskMode.DIRECT, configured_seconds=runtime_timeout_seconds
@@ -1038,18 +1049,39 @@ class RunService:
             if checkpoint is not None:
                 await runtime.restore_checkpoint(checkpoint)
             token_budget = _runtime_token_budget(mode, configured_tokens=self._runtime_token_budget)
+            cognitive_scene = _cognitive_scene(routing_decision)
+            cognitive_text = await safe_cognitive_context_text(
+                self._cognitive_advisor,
+                tenant_id=tenant_id,
+                user_id=actor_id,
+                scene=cognitive_scene,
+                current_request=request,
+                conversation_id=_string_or_none(routing_decision.get("conversation_id")),
+                run_id=run_id,
+                hermes_failure_sink=self._hermes_advisor,
+            )
+            if self._cognitive_advisor is not None:
+                routing_decision["cognition"] = {
+                    "status": "available" if cognitive_text else "empty",
+                    "scene": cognitive_scene,
+                    "injected": bool(cognitive_text),
+                }
+            artifacts = await self._conversation_artifacts(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                current_request=request,
+                routing_decision=routing_decision,
+                runtime_token_budget=token_budget,
+            )
+            cognitive_artifact = cognitive_context_artifact(cognitive_text)
+            if cognitive_artifact is not None:
+                artifacts = (*artifacts, cognitive_artifact)
             context = TaskContext(
                 run_id=run_id,
                 tenant_id=tenant_id,
                 mode=mode,
                 request=request,
-                artifacts=await self._conversation_artifacts(
-                    tenant_id=tenant_id,
-                    run_id=run_id,
-                    current_request=request,
-                    routing_decision=routing_decision,
-                    runtime_token_budget=token_budget,
-                ),
+                artifacts=artifacts,
                 checkpoint=checkpoint,
                 routing_decision=cast(Mapping[str, JsonValue], routing_decision),
                 timeout_seconds=_runtime_timeout_seconds(
@@ -1107,6 +1139,16 @@ class RunService:
                 mode=failed.mode,
                 routing_decision=failed.routing_decision,
             )
+            await safe_cognitive_outcome_ingest(
+                self._cognitive_outcome_ingester,
+                tenant_id=failed.tenant_id,
+                user_id=failed.actor_id,
+                run_id=run_id,
+                status=failed.status,
+                request=failed.request,
+                routing_decision=failed.routing_decision,
+                hermes_failure_sink=self._hermes_advisor,
+            )
             await self._safe_notify_terminal_hooks(
                 tenant_id=failed.tenant_id,
                 actor_id=failed.actor_id,
@@ -1141,6 +1183,16 @@ class RunService:
                 mode=mode,
                 routing_decision=routing_decision,
                 scheduler_notices=tuple(scheduler_notice_payloads),
+            )
+            await safe_cognitive_outcome_ingest(
+                self._cognitive_outcome_ingester,
+                tenant_id=tenant_id,
+                user_id=actor_id,
+                run_id=run_id,
+                status=terminal,
+                request=request,
+                routing_decision=routing_decision,
+                hermes_failure_sink=self._hermes_advisor,
             )
             await self._safe_notify_terminal_hooks(
                 tenant_id=tenant_id,
@@ -2467,6 +2519,19 @@ def _safe_channel_context(channel_context: Mapping[str, str]) -> dict[str, str]:
         if key in allowed and isinstance(value, str) and value:
             result[key] = value[:512]
     return result
+
+
+def _cognitive_scene(routing_decision: Mapping[str, object]) -> str:
+    values = (
+        routing_decision.get("source_channel"),
+        routing_decision.get("channel_conversation_type"),
+        routing_decision.get("channel_entry_policy"),
+        routing_decision.get("requested_channel_features"),
+    )
+    haystack = " ".join(value.casefold() for value in values if isinstance(value, str))
+    if any(marker in haystack for marker in ("voice", "audio", "speech", "语音")):
+        return "voice_chat"
+    return "task_execution"
 
 
 def _runtime_failure_reason(error: Exception) -> str:

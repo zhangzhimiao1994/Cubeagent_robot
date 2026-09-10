@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from agent_hub.cognition.types import CognitiveContextBundle
 from agent_hub.domain.runs import RunStatus, TaskMode
 from agent_hub.runs.repository import RunRecord
 from agent_hub.runs.service import HermesRunOutcome, RunService
@@ -150,7 +151,11 @@ class ExecutableFakeRepository:
 class RuntimeCompletes:
     mode = TaskMode.DISPATCH
 
+    def __init__(self) -> None:
+        self.contexts: list[TaskContext] = []
+
     async def run(self, context: TaskContext) -> AsyncIterator[RunEvent]:
+        self.contexts.append(context)
         yield RunEvent(kind=EventKind.RUNTIME_COMPLETED, sequence=1, run_id=context.run_id)
 
     async def save_checkpoint(self) -> RuntimeCheckpoint:
@@ -195,12 +200,55 @@ class RuntimeReportsCapacityPressure:
 class RecordingHermesAdvisor:
     def __init__(self) -> None:
         self.outcomes: list[HermesRunOutcome] = []
+        self.feedback_payloads: list[dict[str, object]] = []
 
     async def advise(self, **kwargs: object) -> None:
         del kwargs
 
     async def record_outcome(self, outcome: HermesRunOutcome) -> None:
         self.outcomes.append(outcome)
+
+    async def record_hermes_feedback(self, payload: dict[str, object]) -> None:
+        self.feedback_payloads.append(payload)
+
+
+class WorkingCognitiveAdvisor:
+    async def advise(self, **kwargs: object) -> CognitiveContextBundle:
+        del kwargs
+        return CognitiveContextBundle(
+            experience_context=("Keep voice replies short after deployment failures.",),
+            relationship_context=("User prefers direct debugging steps.",),
+        )
+
+
+class RecordingCognitiveOutcomeIngester:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.calls: list[dict[str, object]] = []
+
+    async def ingest_run_outcome(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID | None,
+        run_id: UUID,
+        status: str,
+        request: str,
+        routing_decision: dict[str, object],
+    ) -> None:
+        self.calls.append(
+            {
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "run_id": run_id,
+                "status": status,
+                "request": request,
+                "routing_decision": routing_decision,
+            }
+        )
+        if self.fail:
+            raise RuntimeError("cognition ingest failed")
+
 
 class RecordingHook:
     def __init__(self, *, fail: bool = False) -> None:
@@ -344,3 +392,59 @@ async def test_execute_records_observer_notices_in_hermes_scheduler_outcome() ->
     )
     assert "正文" not in repr(outcome.scheduler_notices)
     assert "prompt" not in repr(outcome.scheduler_notices)
+
+
+@pytest.mark.asyncio
+async def test_execute_passes_cognitive_context_as_internal_artifact() -> None:
+    repository = ExecutableFakeRepository(
+        routing_decision={"source_channel": "voice", "conversation_id": "conv-voice"}
+    )
+    runtime = RuntimeCompletes()
+    service = RunService(
+        repository,  # type: ignore[arg-type]
+        runtime_registry=RuntimeRegistry((runtime,)),
+        router=None,
+        task_queue=object(),  # type: ignore[arg-type]
+        cognitive_advisor=WorkingCognitiveAdvisor(),
+    )
+
+    submitted = await service.execute(repository.run_id)
+
+    assert submitted.status is RunStatus.COMPLETED
+    assert len(runtime.contexts) == 1
+    context = runtime.contexts[0]
+    cognitive = context.routing_decision["cognition"]
+    assert cognitive == {"status": "available", "scene": "voice_chat", "injected": True}
+    assert "Keep voice replies short" not in repr(context.routing_decision)
+    cognitive_artifacts = [
+        item for item in context.artifacts if item.producer == "cognitive_context"
+    ]
+    assert len(cognitive_artifacts) == 1
+    assert cognitive_artifacts[0].content["trust"] == "internal_cognitive_guidance"
+    assert "Keep voice replies short" in str(cognitive_artifacts[0].content["text"])
+
+
+@pytest.mark.asyncio
+async def test_execute_ingests_cognitive_outcome_and_records_failure_feedback() -> None:
+    repository = ExecutableFakeRepository(routing_decision={"source": "manual"})
+    hermes = RecordingHermesAdvisor()
+    ingester = RecordingCognitiveOutcomeIngester(fail=True)
+    service = RunService(
+        repository,  # type: ignore[arg-type]
+        runtime_registry=RuntimeRegistry((RuntimeCompletes(),)),
+        router=None,
+        task_queue=object(),  # type: ignore[arg-type]
+        hermes_advisor=hermes,
+        cognitive_outcome_ingester=ingester,
+    )
+
+    submitted = await service.execute(repository.run_id)
+
+    assert submitted.status is RunStatus.COMPLETED
+    assert ingester.calls[0]["tenant_id"] == TENANT_ID
+    assert ingester.calls[0]["user_id"] == ACTOR_ID
+    assert ingester.calls[0]["status"] == "completed"
+    assert ingester.calls[0]["request"] == "run evolution round"
+    assert hermes.feedback_payloads[0]["lesson"].startswith(
+        "cognition_failure stage=outcome_ingest"
+    )

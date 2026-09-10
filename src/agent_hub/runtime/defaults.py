@@ -27,6 +27,7 @@ from agent_hub.runtime.autogen.adapter import (
     DiscussionParticipant,
     DiscussionPlan,
 )
+from agent_hub.runtime.cognitive_context import cognitive_context_text_from_artifacts
 from agent_hub.runtime.contracts import (
     EventKind,
     ExecutionRuntime,
@@ -750,9 +751,12 @@ def _dispatch_plan(
         )
     request_text = str(context.request)
     hermes_context = hermes_memory_context_text(context.routing_decision)
+    cognitive_context = cognitive_context_text_from_artifacts(context.artifacts)
     memory_guidance = (
-        f"\nHermes+ confirmed memory guidance:\n{hermes_context}\n"
-        if hermes_context
+        "\nRuntime memory guidance:\n"
+        f"{hermes_context}\n"
+        f"{cognitive_context}\n"
+        if hermes_context or cognitive_context
         else ""
     )
     step_token_budget = min(context.token_budget, 1_000_000)

@@ -15,7 +15,7 @@ from agent_hub.runs.service import (
     HermesSkippedMemory,
     RunService,
 )
-from agent_hub.runtime.defaults import UnavailableRuntime
+from agent_hub.runtime.contracts import RuntimeCheckpoint, TaskContext
 from agent_hub.runtime.registry import RuntimeRegistry
 
 
@@ -26,6 +26,24 @@ class RecordingQueue:
     async def enqueue_run(self, run_id: UUID, *, idempotency_key: str) -> None:
         del idempotency_key
         self.enqueued.append(run_id)
+
+
+class UnavailableRuntime:
+    def __init__(self, mode: TaskMode) -> None:
+        self.mode = mode
+
+    async def run(self, context: TaskContext) -> object:
+        del context
+        raise AssertionError("conversation mode tests do not execute runtimes")
+
+    async def save_checkpoint(self) -> RuntimeCheckpoint:
+        raise AssertionError("not used")
+
+    async def restore_checkpoint(self, checkpoint: RuntimeCheckpoint) -> None:
+        del checkpoint
+
+    async def cancel(self) -> None:
+        raise AssertionError("not used")
 
 
 class WaitingRouter:

@@ -19,6 +19,10 @@ from agent_hub.models.types import (
     ModelResponse,
     TokenUsage,
 )
+from agent_hub.runtime.cognitive_context import (
+    cognitive_context_text_from_artifacts,
+    source_artifacts_without_cognitive_context,
+)
 from agent_hub.runtime.contracts import (
     Artifact,
     EventKind,
@@ -435,7 +439,7 @@ class DirectRuntime:
         messages: tuple[ModelMessage, ...] | None = None
         error_code: str | None = None
         try:
-            for artifact in context.artifacts:
+            for artifact in source_artifacts_without_cognitive_context(context.artifacts):
                 if artifact.type != "text":
                     continue
                 text = artifact.content.get("text")
@@ -468,9 +472,11 @@ class DirectRuntime:
                 separators=(",", ":"),
             ).replace("<", "\\u003c").replace(">", "\\u003e")
             hermes_context = hermes_memory_context_text(context.routing_decision)
+            cognitive_context = cognitive_context_text_from_artifacts(context.artifacts)
             payload = (
                 f"<USER_REQUEST_JSON>{task_payload}</USER_REQUEST_JSON>\n"
                 f"{hermes_context}\n"
+                f"{cognitive_context}\n"
                 f"<UNTRUSTED_ARTIFACTS_JSON>{prior_payload}</UNTRUSTED_ARTIFACTS_JSON>"
             )
             if len(payload.encode("utf-8")) > _MAX_CONTEXT_BYTES:

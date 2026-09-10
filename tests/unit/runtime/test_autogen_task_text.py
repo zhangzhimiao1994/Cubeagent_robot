@@ -2,6 +2,7 @@ from uuid import uuid4
 
 from agent_hub.domain.runs import TaskMode
 from agent_hub.runtime.autogen.adapter import AutoGenDiscussionRuntime
+from agent_hub.runtime.cognitive_context import cognitive_context_artifact
 from agent_hub.runtime.contracts import Artifact, TaskContext
 
 
@@ -47,3 +48,32 @@ def test_discussion_task_text_truncates_large_artifact_text_for_capacity_estimat
     assert "[truncated:" in task_text
     assert len(task_text.encode("utf-8")) < len(original_text.encode("utf-8"))
     assert artifact.content["text"] == original_text
+
+
+def test_discussion_task_text_includes_cognitive_context_outside_artifacts() -> None:
+    cognitive = cognitive_context_artifact(
+        "<COGNITIVE_CONTEXT>\n[relationship_context]\n- Prefer direct debugging steps.\n</COGNITIVE_CONTEXT>"
+    )
+    assert cognitive is not None
+    artifact = Artifact(
+        id=uuid4(),
+        type="text",
+        producer="planner",
+        content={"text": "plan"},
+    )
+    context = TaskContext(
+        run_id=uuid4(),
+        tenant_id=uuid4(),
+        mode=TaskMode.DISCUSS,
+        request="Discuss the plan.",
+        artifacts=(artifact, cognitive),
+    )
+
+    task_text = AutoGenDiscussionRuntime._task_text(context)
+
+    assert "COGNITIVE_CONTEXT" in task_text
+    assert "Prefer direct debugging steps" in task_text
+    assert "Artifact" in task_text
+    assert "cognitive_context" not in task_text.split("Validated artifacts:", 1)[1].split(
+        "COGNITIVE_CONTEXT", 1
+    )[0]

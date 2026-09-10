@@ -4,6 +4,7 @@ from typing import cast
 from uuid import uuid4
 
 from agent_hub.domain.runs import TaskMode
+from agent_hub.runtime.cognitive_context import cognitive_context_artifact
 from agent_hub.runtime.contracts import Artifact, JsonValue, TaskContext
 from agent_hub.runtime.direct import DirectRuntime
 
@@ -72,3 +73,35 @@ def test_direct_prompt_includes_bounded_hermes_memory_context() -> None:
     serialized = "\n".join(cast(str, message.content) for message in prompt.messages)
     assert "HERMES_MEMORY_CONTEXT" in serialized
     assert "reviewer 超时时先压缩上下文再分块审查" in serialized
+
+
+def test_direct_prompt_includes_cognitive_context_outside_untrusted_artifacts() -> None:
+    cognitive = cognitive_context_artifact(
+        "<COGNITIVE_CONTEXT>\n[experience_context]\n- Keep voice replies short.\n</COGNITIVE_CONTEXT>"
+    )
+    assert cognitive is not None
+    source = Artifact(
+        id=uuid4(),
+        type="text",
+        producer="planner",
+        content={"text": "ordinary source"},
+    )
+    context = TaskContext(
+        run_id=uuid4(),
+        tenant_id=uuid4(),
+        mode=TaskMode.DIRECT,
+        request="Speak to the user.",
+        artifacts=(source, cognitive),
+        timeout_seconds=60,
+        token_budget=10_000,
+    )
+    runtime = DirectRuntime(UnusedGateway(), logical_model="main")  # type: ignore[arg-type]
+
+    prompt = runtime._build_prompt(context)
+
+    assert prompt.messages is not None
+    serialized = "\n".join(cast(str, message.content) for message in prompt.messages)
+    assert "COGNITIVE_CONTEXT" in serialized
+    assert "Keep voice replies short" in serialized
+    assert '"producer":"cognitive_context"' not in serialized
+    assert "ordinary source" in serialized
