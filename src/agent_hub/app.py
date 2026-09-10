@@ -91,6 +91,7 @@ from agent_hub.multimodal.minimax import MiniMaxVideoGenerationClient
 from agent_hub.multimodal.video_providers import TextToVideoProvider, TextToVideoProviderRouter
 from agent_hub.observability.logging import configure_logging
 from agent_hub.observability.metrics import default_metrics_registry
+from agent_hub.robot.session import RobotSessionRegistry
 from agent_hub.routing.classifier import GatewayRouteClassifier
 from agent_hub.routing.service import ModeRouter, RoutingPolicy
 from agent_hub.routing.types import (
@@ -108,6 +109,8 @@ from agent_hub.scheduler.service import SchedulerService
 from agent_hub.scheduler.types import TaskRequest
 from agent_hub.security.secrets import SecretCipher, SecretService
 from agent_hub.settings import Settings, get_settings
+from agent_hub.voice.companion import CompanionResponder
+from agent_hub.voice.gateway import create_robot_voice_router
 
 ReadinessProbe = Callable[[], Awaitable[None]]
 CleanupCallback = tuple[str, Callable[[], Awaitable[None]]]
@@ -941,6 +944,10 @@ def create_app(
     application.state.feishu_websocket_connector = None
     application.state.feishu_websocket_task = None
     application.state.multimedia_generation_executor = None
+    robot_responder = CompanionResponder()
+    application.state.robot_session_registry = RobotSessionRegistry(
+        responder=robot_responder.respond_text
+    )
 
     async def refresh_channel_runtime_config(runtime_config: Mapping[str, str]) -> None:
         application.state.channel_runtime_config = dict(runtime_config)
@@ -986,6 +993,12 @@ def create_app(
             env=os.environ,
             gateway_provider=_feishu_gateway_from_request,
             runtime_config_provider=_channel_runtime_config_from_request,
+        ).routes
+    )
+    application.router.routes.extend(
+        create_robot_voice_router(
+            registry=application.state.robot_session_registry,
+            responder=robot_responder,
         ).routes
     )
 
