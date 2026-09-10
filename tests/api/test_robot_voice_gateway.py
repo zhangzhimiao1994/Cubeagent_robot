@@ -11,8 +11,10 @@ from agent_hub.domain.runs import RunStatus, TaskMode
 from agent_hub.robot.protocol import RobotMessageType, build_envelope
 from agent_hub.runs.service import SubmittedRun
 from agent_hub.settings import Settings
+from agent_hub.voice.companion import RobotRunBridge
 
 ROBOT_RUN_ID = UUID("00000000-0000-4000-8000-000000000301")
+ROBOT_TENANT_ID = UUID("00000000-0000-4000-8000-000000000201")
 
 
 class StubAuthService:
@@ -21,7 +23,7 @@ class StubAuthService:
             raise InvalidCredentials("bad token")
         return AuthenticatedPrincipal(
             user_id=UUID("00000000-0000-4000-8000-000000000101"),
-            tenant_id=UUID("00000000-0000-4000-8000-000000000201"),
+            tenant_id=ROBOT_TENANT_ID,
             role=Role.ADMIN,
         )
 
@@ -56,6 +58,7 @@ class FakeRobotRunService:
     def __init__(self, *, status: RunStatus = RunStatus.QUEUED) -> None:
         self.status = status
         self.submitted: dict[str, object] = {}
+        self.submissions: list[dict[str, object]] = []
         self.executed_run_id: UUID | None = None
 
     async def submit(
@@ -79,6 +82,7 @@ class FakeRobotRunService:
             "channel_context": channel_context,
             "idempotency_key": idempotency_key,
         }
+        self.submissions.append(self.submitted)
         return SubmittedRun(
             id=ROBOT_RUN_ID,
             tenant_id=tenant_id,
@@ -150,15 +154,19 @@ def _final_speech_response(
     client: TestClient,
     *,
     text: str = "测试语音",
+    message_id: str | None = None,
 ) -> dict[str, object]:
     with client.websocket_connect("/api/v1/robot/ws/pi-lab-01", headers=_device_headers()) as ws:
+        envelope = build_envelope(
+            message_type=RobotMessageType.SPEECH_PARTIAL,
+            device_id="pi-lab-01",
+            session_id="voice-session-1",
+            payload={"text": text, "is_final": True},
+        )
+        if message_id is not None:
+            envelope = envelope.model_copy(update={"message_id": message_id})
         ws.send_json(
-            build_envelope(
-                message_type=RobotMessageType.SPEECH_PARTIAL,
-                device_id="pi-lab-01",
-                session_id="voice-session-1",
-                payload={"text": text, "is_final": True},
-            ).model_dump(mode="json")
+            envelope.model_dump(mode="json")
         )
         return ws.receive_json()
 
@@ -242,6 +250,87 @@ def test_robot_websocket_bridges_final_speech_to_agent_run_artifact() -> None:
     assert run_service.executed_run_id == ROBOT_RUN_ID
     assert response["type"] == "assistant.text.done"
     assert response["payload"]["text"] == "服务端 Agent 回复"
+
+
+def test_robot_websocket_uses_final_envelope_message_id_for_run_idempotency() -> None:
+    run_service = FakeRobotRunService()
+    run_repository = FakeRobotRunRepository(
+        (
+            {
+                "id": str(UUID("00000000-0000-4000-8000-000000000401")),
+                "producer": "main_agent",
+                "content": {"text": "服务端 Agent 回复"},
+            },
+        )
+    )
+    client = _client(run_service=run_service, run_repository=run_repository)
+
+    _final_speech_response(client, text="同一句话", message_id="robot-msg-1")
+    _final_speech_response(client, text="同一句话", message_id="robot-msg-1")
+    _final_speech_response(client, text="同一句话", message_id="robot-msg-2")
+
+    idempotency_keys = [
+        str(submission["idempotency_key"]) for submission in run_service.submissions
+    ]
+    assert idempotency_keys[0] == idempotency_keys[1]
+    assert idempotency_keys[2] != idempotency_keys[0]
+
+
+@pytest.mark.asyncio
+async def test_robot_run_bridge_generates_tenant_safe_bounded_idempotency_key() -> None:
+    run_service = FakeRobotRunService()
+    bridge = RobotRunBridge(
+        run_service=run_service,
+        run_repository=FakeRobotRunRepository(()),
+        tenant_id=ROBOT_TENANT_ID,
+    )
+
+    await bridge.respond_text(
+        "测试语音",
+        device_id="d" * 128,
+        session_id="s" * 128,
+        message_id="m" * 128,
+    )
+
+    idempotency_key = str(run_service.submitted["idempotency_key"])
+    assert idempotency_key.startswith("robot:")
+    assert len(idempotency_key) <= 64
+    assert len(f"{ROBOT_TENANT_ID}:{idempotency_key}") <= 128
+
+
+@pytest.mark.asyncio
+async def test_robot_run_bridge_keys_distinguish_distinct_message_ids() -> None:
+    run_service = FakeRobotRunService()
+    bridge = RobotRunBridge(
+        run_service=run_service,
+        run_repository=FakeRobotRunRepository(()),
+        tenant_id=ROBOT_TENANT_ID,
+    )
+
+    await bridge.respond_text(
+        "同一句话",
+        device_id="pi-lab-01",
+        session_id="voice-session-1",
+        message_id="robot-msg-1",
+    )
+    first_key = run_service.submitted["idempotency_key"]
+    await bridge.respond_text(
+        "同一句话",
+        device_id="pi-lab-01",
+        session_id="voice-session-1",
+        message_id="robot-msg-1",
+    )
+    retry_key = run_service.submitted["idempotency_key"]
+    await bridge.respond_text(
+        "同一句话",
+        device_id="pi-lab-01",
+        session_id="voice-session-1",
+        message_id="robot-msg-2",
+    )
+    next_key = run_service.submitted["idempotency_key"]
+
+    assert retry_key == first_key
+    assert next_key != first_key
 
 
 def test_robot_websocket_returns_bounded_fallback_when_run_has_no_artifact() -> None:

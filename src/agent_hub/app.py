@@ -973,18 +973,26 @@ def create_app(
         else None
     )
 
-    async def respond_robot_text(utterance: str, *, device_id: str, session_id: str) -> str:
+    async def respond_robot_text(
+        utterance: str,
+        *,
+        device_id: str,
+        session_id: str,
+        message_id: str | None = None,
+    ) -> str:
         bridge = getattr(application.state, "robot_run_bridge", None)
         if isinstance(bridge, RobotRunBridge):
             return await bridge.respond_text(
                 utterance,
                 device_id=device_id,
                 session_id=session_id,
+                message_id=message_id,
             )
         return robot_fallback_responder.respond_text(
             utterance,
             device_id=device_id,
             session_id=session_id,
+            message_id=message_id,
         )
 
     application.state.robot_session_registry = RobotSessionRegistry(

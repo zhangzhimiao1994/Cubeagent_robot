@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from enum import StrEnum
-from inspect import isawaitable
+from inspect import Parameter, isawaitable, signature
 from typing import cast
 
 from pydantic import BaseModel, ConfigDict
@@ -57,8 +57,7 @@ class RobotSessionRegistry:
             return ()
         response_text = self._responder(
             utterance,
-            device_id=envelope.device_id,
-            session_id=envelope.session_id,
+            **_responder_kwargs(envelope, self._responder),
         )
         if isawaitable(response_text):
             raise RuntimeError("async robot responder requires record_async")
@@ -70,8 +69,7 @@ class RobotSessionRegistry:
             return ()
         response_text = self._responder(
             utterance,
-            device_id=envelope.device_id,
-            session_id=envelope.session_id,
+            **_responder_kwargs(envelope, self._responder),
         )
         if isawaitable(response_text):
             response_text = await response_text
@@ -136,9 +134,38 @@ class RobotSessionRegistry:
         )
 
 
-def _default_response(utterance: str, *, device_id: str, session_id: str) -> str:
-    del device_id, session_id
+def _default_response(
+    utterance: str,
+    *,
+    device_id: str,
+    session_id: str,
+    message_id: str | None = None,
+) -> str:
+    del device_id, session_id, message_id
     return f"我听到了：{utterance}"
+
+
+def _responder_kwargs(
+    envelope: RobotEnvelope,
+    responder: CompanionResponse,
+) -> dict[str, str]:
+    kwargs = {
+        "device_id": envelope.device_id,
+        "session_id": envelope.session_id,
+    }
+    if _accepts_message_id(responder):
+        kwargs["message_id"] = envelope.message_id
+    return kwargs
+
+
+def _accepts_message_id(responder: CompanionResponse) -> bool:
+    try:
+        parameters = signature(responder).parameters
+    except (TypeError, ValueError):
+        return False
+    return any(parameter.kind is Parameter.VAR_KEYWORD for parameter in parameters.values()) or (
+        "message_id" in parameters
+    )
 
 
 def _state_after(envelope: RobotEnvelope, current: RobotSessionState) -> RobotSessionState:

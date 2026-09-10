@@ -42,8 +42,15 @@ class RobotRunRepositoryProtocol(Protocol):
 class CompanionResponder:
     """Replaceable bridge from a robot utterance to companion text."""
 
-    def respond_text(self, utterance: str, *, device_id: str, session_id: str) -> str:
-        del device_id, session_id
+    def respond_text(
+        self,
+        utterance: str,
+        *,
+        device_id: str,
+        session_id: str,
+        message_id: str | None = None,
+    ) -> str:
+        del device_id, session_id, message_id
         return f"我听到了：{utterance}"
 
 
@@ -63,29 +70,48 @@ class RobotRunBridge:
         self._tenant_id = tenant_id
         self._actor_id = actor_id or tenant_id
 
-    async def respond_text(self, utterance: str, *, device_id: str, session_id: str) -> str:
+    async def respond_text(
+        self,
+        utterance: str,
+        *,
+        device_id: str,
+        session_id: str,
+        message_id: str | None = None,
+    ) -> str:
         try:
             return await self._respond_text(
                 utterance,
                 device_id=device_id,
                 session_id=session_id,
+                message_id=message_id,
             )
         except Exception as error:  # noqa: BLE001 - robot voice must degrade safely.
             _LOGGER.warning("robot_run_bridge_failed error_type=%s", type(error).__name__)
             return _fallback_text(None)
 
-    async def _respond_text(self, utterance: str, *, device_id: str, session_id: str) -> str:
-        digest = hashlib.sha256(utterance.encode("utf-8")).hexdigest()
+    async def _respond_text(
+        self,
+        utterance: str,
+        *,
+        device_id: str,
+        session_id: str,
+        message_id: str | None,
+    ) -> str:
+        utterance_digest = hashlib.sha256(utterance.encode("utf-8")).hexdigest()
+        message_digest = _short_digest(message_id or "", utterance_digest)
         conversation_id = (
             f"robot-{_safe_conversation_part(device_id)}-{_safe_conversation_part(session_id)}"
         )
-        idempotency_key = f"robot:{device_id}:{session_id}:{digest}"
+        idempotency_key = (
+            f"robot:{_short_digest(device_id, length=12)}:"
+            f"{_short_digest(session_id, length=12)}:{message_digest}"
+        )
         channel_context = {
             "source_channel": "robot_voice",
             "channel_tenant_external_id": str(self._tenant_id),
             "channel_sender_external_id": device_id,
             "channel_conversation_external_id": session_id,
-            "channel_message_id": digest[:32],
+            "channel_message_id": message_id or utterance_digest[:32],
             "channel_event_id": idempotency_key,
             "channel_conversation_type": "voice_chat",
             "channel_entry_policy": "main_agent_decides",
@@ -170,3 +196,13 @@ def _fallback_text(run_id: UUID | None) -> str:
 def _safe_conversation_part(value: str) -> str:
     normalized = _SAFE_CONVERSATION_PART.sub("-", value.strip()).strip("-")
     return normalized or "unknown"
+
+
+def _short_digest(*parts: str, length: int = 32) -> str:
+    digest = hashlib.sha256()
+    for part in parts:
+        encoded = part.encode("utf-8")
+        digest.update(str(len(encoded)).encode("ascii"))
+        digest.update(b":")
+        digest.update(encoded)
+    return digest.hexdigest()[:length]
