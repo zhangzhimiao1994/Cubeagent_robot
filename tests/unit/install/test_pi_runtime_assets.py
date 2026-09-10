@@ -42,6 +42,38 @@ def test_pi_provisioning_assets_keep_runtime_state_outside_releases() -> None:
         assert "/var/lib/cube-robot" in text
 
 
+def test_robot_voice_probe_asset_documents_required_cli_and_robot_protocol_paths() -> None:
+    probe = Path("tools") / "robot_voice_probe.py"
+    assert probe.exists(), probe
+
+    text = probe.read_text(encoding="utf-8")
+    for required in (
+        "--base-url",
+        "--device-id",
+        "--device-token",
+        "--utterance",
+        "/api/v1/robot/ws/",
+    ):
+        assert required in text
+
+
+def test_robot_field_test_checklist_covers_2026_09_12_production_runbook() -> None:
+    checklist = Path("docs") / "robot-field-test.md"
+    assert checklist.exists(), checklist
+
+    text = checklist.read_text(encoding="utf-8")
+    for required in (
+        "2026-09-12",
+        "prod-web-02",
+        "32020",
+        "OTA dry-run",
+        "audio capture",
+        "playback",
+        "rollback",
+    ):
+        assert required in text
+
+
 def test_runtime_service_entry_point_accepts_run_config(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
