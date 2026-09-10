@@ -80,6 +80,7 @@ Raspberry Pi 5: cube-robot-runtime
   Display Runtime
   Device Manager
   Network Manager
+  Provisioning And OTA Manager
   Hardware Safety Boundary
 ```
 
@@ -138,6 +139,9 @@ cube-robot-runtime/
   config/
   scripts/
     cube-robot.service
+    first-boot-register.sh
+    ota-update.sh
+    rollback.sh
   main.py
 ```
 
@@ -149,7 +153,32 @@ The Pi 5 should be treated as a small brain, sensory runtime, and safety boundar
 - Barge-in detection and local playback stop.
 - Screen/avatar/status rendering.
 - Device heartbeat, reconnect, and local cache.
+- First-boot provisioning after image flashing.
+- OTA update check, download, verify, install, restart, and rollback.
 - Later: camera, sensors, ESP32/STM32 bridge, and offline fallback.
+
+## Raspberry Pi Provisioning And OTA
+
+The project should include repeatable Raspberry Pi setup assets so a device can be flashed, booted, registered, and upgraded without manual source edits on the Pi.
+
+Provisioning assets:
+
+- A Pi runtime configuration template for server URL, device name, audio device, screen mode, and environment.
+- A first-boot registration script that creates or loads a device identity, registers with the server, stores the returned device token securely, and enables the runtime service.
+- A `systemd` service for the robot runtime and a separate updater service/timer.
+- A hardware-free dry-run mode so provisioning scripts can be tested before using a physical Pi.
+- Optional image build scripts later, for example a Raspberry Pi OS customization pipeline that injects the runtime package, service files, and first-boot script.
+
+OTA requirements:
+
+- The server publishes signed update metadata with version, channel, artifact URL, sha256, minimum compatible protocol version, and rollback information.
+- The Pi updater checks metadata, downloads the artifact, verifies signature and checksum, installs to a versioned release directory, switches a `current` pointer, restarts the service, and reports status.
+- Failed health checks must roll back to the previous known-good release.
+- OTA must not overwrite local device identity, device token, user config, audio calibration, logs needed for debugging, or active cache unless the update explicitly migrates them.
+- Update channels should start with `stable` and `dev`; production robots default to `stable`.
+- The Web debug console should show device runtime version, available update, last update result, rollback availability, and updater logs.
+
+The first MVP does not need to build a full custom OS image. It should provide installable files and scripts that can be run on a freshly flashed Raspberry Pi OS. Full image generation can be added after the runtime package and OTA flow stabilize.
 
 ## Robot Protocol v1
 
@@ -299,7 +328,7 @@ Standing cleanup approval:
 
 ### Phase 1: Robot Protocol And Pi Runtime MVP
 
-Build protocol types, mock server path, Pi client skeleton, heartbeat, microphone capture stub or real capture, playback stub or real playback, screen status, and one WebSocket loop. Goal: Pi can connect, send a simulated utterance/audio event, receive a response, play or display it, and report status.
+Build protocol types, mock server path, Pi client skeleton, heartbeat, microphone capture stub or real capture, playback stub or real playback, screen status, first-boot registration script, `systemd` runtime service, and one WebSocket loop. Goal: Pi can connect, send a simulated utterance/audio event, receive a response, play or display it, and report status.
 
 ### Phase 2: Server Voice Gateway And Conversation Bridge
 
@@ -315,7 +344,7 @@ Add Companion Persona, Life Timeline, EmotionState, ProactivePolicy, and Interac
 
 ### Phase 5: Embodiment And Resilience
 
-Add camera/sensor inputs, richer screen/avatar, ESP32/STM32 safety bridge, offline mode, OTA, and wake word.
+Add camera/sensor inputs, richer screen/avatar, ESP32/STM32 safety bridge, offline mode, production OTA, optional full Pi image build pipeline, and wake word.
 
 ## Verification
 
@@ -328,6 +357,8 @@ Each implementation phase needs focused tests before broader checks:
 - Hermes/Memory integration tests proving interaction events are recorded without leaking secrets.
 - Web debug tests for device/session visibility.
 - Pi runtime dry-run tests that run without hardware.
+- Provisioning script dry-run tests.
+- OTA metadata validation, checksum verification, install, health-check failure, and rollback tests.
 - Hardware smoke tests on Pi only when the target device is available.
 
 For frontend changes, run TypeScript lint, Vitest, build, and rendered UI checks for the voice debug surface. For backend changes, run focused pytest, broader relevant pytest, ruff, mypy where feasible, and `git diff --check`.
@@ -337,3 +368,4 @@ For frontend changes, run TypeScript lint, Vitest, build, and rendered UI checks
 - Whether the Pi runtime should live inside this repository for the first MVP or become a separate repository after Robot Protocol v1 stabilizes.
 - Which realtime provider is the first production target: OpenAI Realtime, separate STT/TTS providers, or a mock-compatible provider abstraction first.
 - Whether the current production system already has persistent data that must be migrated before hiding/removing generic Agent Hub modules.
+- Whether the first Pi deliverable should be install scripts for Raspberry Pi OS only, or also a reproducible custom image builder.
