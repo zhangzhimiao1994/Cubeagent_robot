@@ -10,7 +10,6 @@ from agent_hub.cognition.repository import CognitionRepository
 from agent_hub.cognition.types import (
     CognitiveEpisode,
     CognitiveRecordStatus,
-    EpisodeOutcome,
     EpisodeSignal,
     EvidenceRef,
     ExperienceKind,
@@ -137,8 +136,6 @@ def _experience_kind_from_episode(episode: CognitiveEpisode) -> ExperienceKind:
     if {EpisodeSignal.USER_CORRECTED, EpisodeSignal.USER_REJECTED} & signals:
         return ExperienceKind.FAILURE_PATTERN
     if {EpisodeSignal.USER_SATISFIED, EpisodeSignal.TASK_SUCCEEDED} & signals:
-        return ExperienceKind.SUCCESS_PATTERN
-    if episode.outcome is EpisodeOutcome.SUCCESS:
         return ExperienceKind.SUCCESS_PATTERN
     return ExperienceKind.STRATEGY
 

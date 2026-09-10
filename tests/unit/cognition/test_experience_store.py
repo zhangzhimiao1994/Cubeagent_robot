@@ -115,7 +115,7 @@ async def test_record_episode_always_persists_episode_before_gate_result() -> No
         ((EpisodeSignal.USER_REJECTED,), EpisodeOutcome.NEUTRAL, "failure_pattern"),
         ((EpisodeSignal.USER_SATISFIED,), EpisodeOutcome.NEUTRAL, "success_pattern"),
         ((EpisodeSignal.TASK_SUCCEEDED,), EpisodeOutcome.SUCCESS, "success_pattern"),
-        ((), EpisodeOutcome.SUCCESS, "success_pattern"),
+        ((), EpisodeOutcome.SUCCESS, "strategy"),
         ((EpisodeSignal.REPEATED_PATTERN,), EpisodeOutcome.NEUTRAL, "strategy"),
     ],
 )
