@@ -139,6 +139,17 @@ export const MODULE_GROUPS: ModuleGroup[] = [
         permission: "memory:read",
       },
       {
+        to: "/cognition",
+        label: "认知成长",
+        description: "查看经验、反思、信念、关系和世界状态，并预览上下文召回。",
+        permission: "cognition:read",
+        children: [
+          { to: "/cognition?tab=episodes", label: "Episodes", permission: "cognition:read" },
+          { to: "/cognition?tab=experiences", label: "Experiences", permission: "cognition:read" },
+          { to: "/cognition?tab=preview", label: "Router Preview", permission: "cognition:read" },
+        ],
+      },
+      {
         to: "/attachments",
         label: "附件",
         description: "查看和删除从对话页上传的图片、文档、压缩包和上下文文件。",

@@ -1,7 +1,7 @@
 import { useCallback, useEffect } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
 
-export function useNavSection(paramNames: string[] = ["section"]) {
+export function useNavSection(paramNames: string[] = ["section", "tab"]) {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const activeSection = paramNames

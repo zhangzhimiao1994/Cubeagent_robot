@@ -7,6 +7,7 @@ import { AgentsPage } from "../pages/AgentsPage";
 import { AttachmentsPage } from "../pages/AttachmentsPage";
 import { ChannelsPage } from "../pages/ChannelsPage";
 import { ConfigPage } from "../pages/ConfigPage";
+import { CognitionPage } from "../pages/CognitionPage";
 import { EvolutionPage } from "../pages/EvolutionPage";
 import { HermesPage } from "../pages/HermesPage";
 import { LoginPage } from "../pages/LoginPage";
@@ -65,6 +66,7 @@ export function AppRoutes() {
         <Route path="mcp" element={<McpPage />} />
         <Route path="channels" element={<ChannelsPage />} />
         <Route path="memory" element={<MemoryPage />} />
+        <Route path="cognition" element={<CognitionPage />} />
         <Route path="hermes" element={<HermesPage />} />
         <Route path="hermes/:insightId" element={<HermesPage />} />
         <Route path="users" element={<UsersPage />} />

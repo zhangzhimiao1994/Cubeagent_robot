@@ -41,6 +41,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "mcp:write",
     "memory:*",
     "hermes:*",
+    "cognition:*",
     "run:*",
     "plugin:read",
     "plugin:use",
@@ -62,6 +63,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "mcp:use",
     "plugin:read",
     "plugin:use",
+    "cognition:read",
   ],
   viewer: [
     "run:read",
@@ -74,6 +76,12 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "plugin:use",
   ],
 };
+
+const EvidenceRefSchema = z.object({
+  kind: z.string(),
+  ref_id: z.string(),
+  summary: z.string(),
+});
 
 function safeSessionGet(key: string): string | null {
   try {
@@ -870,6 +878,151 @@ const MemoryRecordSchema = z.object({
 
 export type MemoryRecord = z.infer<typeof MemoryRecordSchema>;
 
+const CognitionEpisodeSchema = z.object({
+  id: z.string(),
+  tenant_id: z.string(),
+  user_id: z.string(),
+  source: z.string(),
+  conversation_id: z.string().nullable().optional(),
+  run_id: z.string().nullable().optional(),
+  started_at: z.string(),
+  ended_at: z.string().nullable().optional(),
+  summary: z.string(),
+  signals: z.array(z.string()).default([]),
+  outcome: z.string(),
+  feedback: z.string().default(""),
+  evidence_refs: z.array(EvidenceRefSchema).default([]),
+  privacy_level: z.string().default("normal"),
+  created_at: z.string(),
+});
+
+const CognitionExperienceSchema = z.object({
+  id: z.string(),
+  tenant_id: z.string(),
+  user_id: z.string(),
+  kind: z.string(),
+  statement: z.string(),
+  applicability: z.string(),
+  recommended_action: z.string().default(""),
+  avoid_action: z.string().default(""),
+  confidence: z.number(),
+  evidence_refs: z.array(EvidenceRefSchema).default([]),
+  contradictions: z.array(EvidenceRefSchema).default([]),
+  usage_count: z.number().default(0),
+  success_count: z.number().default(0),
+  failure_count: z.number().default(0),
+  last_used_at: z.string().nullable().optional(),
+  last_verified_at: z.string().nullable().optional(),
+  version: z.number(),
+  status: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+const CognitionReflectionSchema = z.object({
+  id: z.string(),
+  episode_id: z.string(),
+  reflection_type: z.string(),
+  trigger: z.string(),
+  what_happened: z.string(),
+  why_it_happened: z.string(),
+  better_next_time: z.string(),
+  candidate_experience_ids: z.array(z.string()).default([]),
+  candidate_belief_updates: z.array(z.string()).default([]),
+  candidate_skill_updates: z.array(z.string()).default([]),
+  confidence: z.number(),
+  requires_approval: z.boolean(),
+  evidence_refs: z.array(EvidenceRefSchema).default([]),
+  status: z.string(),
+  version: z.number(),
+  created_at: z.string(),
+});
+
+const CognitionBeliefSchema = z.object({
+  id: z.string(),
+  tenant_id: z.string(),
+  user_id: z.string(),
+  subject: z.string(),
+  predicate: z.string(),
+  object: z.string(),
+  scope: z.string(),
+  confidence: z.number(),
+  evidence_refs: z.array(EvidenceRefSchema).default([]),
+  contradictions: z.array(EvidenceRefSchema).default([]),
+  last_verified_at: z.string().nullable().optional(),
+  verification_count: z.number().default(0),
+  status: z.string(),
+  version: z.number(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+const CognitionRelationshipRecordSchema = z.object({
+  tenant_id: z.string(),
+  user_id: z.string(),
+  familiarity: z.number(),
+  trust: z.number(),
+  rapport: z.number(),
+  preferred_tone: z.string(),
+  preferred_depth: z.string(),
+  interaction_rhythm: z.string(),
+  shared_history: z.array(z.string()).default([]),
+  stable_preferences: z.array(z.string()).default([]),
+  recent_changes: z.array(z.string()).default([]),
+  boundaries: z.array(z.string()).default([]),
+  confidence: z.number(),
+  status: z.string(),
+  version: z.number(),
+  evidence_refs: z.array(EvidenceRefSchema).default([]),
+  last_updated_at: z.string(),
+});
+
+const CognitionRelationshipSchema = z.array(CognitionRelationshipRecordSchema);
+
+const CognitionWorldStateSchema = z.object({
+  id: z.string(),
+  tenant_id: z.string(),
+  user_id: z.string(),
+  entity_type: z.string(),
+  name: z.string(),
+  state: z.string(),
+  status: z.string(),
+  starts_at: z.string().nullable().optional(),
+  due_at: z.string().nullable().optional(),
+  ended_at: z.string().nullable().optional(),
+  participants: z.array(z.string()).default([]),
+  evidence_refs: z.array(EvidenceRefSchema).default([]),
+  confidence: z.number(),
+  version: z.number(),
+  last_verified_at: z.string().nullable().optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+const CognitiveContextBundleSchema = z.object({
+  core_constraints: z.array(z.string()).default([]),
+  relationship_context: z.array(z.string()).default([]),
+  world_context: z.array(z.string()).default([]),
+  experience_context: z.array(z.string()).default([]),
+  belief_context: z.array(z.string()).default([]),
+  skill_context: z.array(z.string()).default([]),
+  reasons: z.array(z.string()).default([]),
+});
+
+export type CognitionEpisode = z.infer<typeof CognitionEpisodeSchema>;
+export type CognitionExperience = z.infer<typeof CognitionExperienceSchema>;
+export type CognitionReflection = z.infer<typeof CognitionReflectionSchema>;
+export type CognitionBelief = z.infer<typeof CognitionBeliefSchema>;
+export type CognitionRelationshipRecord = z.infer<typeof CognitionRelationshipRecordSchema>;
+export type CognitionRelationship = z.infer<typeof CognitionRelationshipSchema>;
+export type CognitionWorldState = z.infer<typeof CognitionWorldStateSchema>;
+export type CognitiveContextBundle = z.infer<typeof CognitiveContextBundleSchema>;
+export type CognitionRouterPreviewPayload = {
+  scene: string;
+  current_request: string;
+  limit?: number;
+};
+
 const AuditEventSchema = z.object({
   id: z.string(),
   actor: z.string(),
@@ -1652,6 +1805,31 @@ export const api = {
   },
   memory(): Promise<MemoryRecord[]> {
     return request("/api/v1/admin/memory", { method: "GET" }, z.array(MemoryRecordSchema));
+  },
+  cognitionEpisodes(): Promise<CognitionEpisode[]> {
+    return request("/api/v1/admin/cognition/episodes", { method: "GET" }, z.array(CognitionEpisodeSchema));
+  },
+  cognitionExperiences(): Promise<CognitionExperience[]> {
+    return request("/api/v1/admin/cognition/experiences", { method: "GET" }, z.array(CognitionExperienceSchema));
+  },
+  cognitionReflections(): Promise<CognitionReflection[]> {
+    return request("/api/v1/admin/cognition/reflections", { method: "GET" }, z.array(CognitionReflectionSchema));
+  },
+  cognitionBeliefs(): Promise<CognitionBelief[]> {
+    return request("/api/v1/admin/cognition/beliefs", { method: "GET" }, z.array(CognitionBeliefSchema));
+  },
+  cognitionRelationship(): Promise<CognitionRelationship> {
+    return request("/api/v1/admin/cognition/relationship", { method: "GET" }, CognitionRelationshipSchema);
+  },
+  cognitionWorldState(): Promise<CognitionWorldState[]> {
+    return request("/api/v1/admin/cognition/world-state", { method: "GET" }, z.array(CognitionWorldStateSchema));
+  },
+  cognitionRouterPreview(payload: CognitionRouterPreviewPayload): Promise<CognitiveContextBundle> {
+    return request(
+      "/api/v1/admin/cognition/router-preview",
+      { method: "POST", body: JSON.stringify(payload) },
+      CognitiveContextBundleSchema,
+    );
   },
   createMemory(payload: { id: string; scope: string; value: string }): Promise<MemoryRecord> {
     return request(

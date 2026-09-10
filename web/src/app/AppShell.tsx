@@ -15,7 +15,7 @@ function sectionFromNavigationTarget(to: string): string | null {
   const query = to.split("?", 2)[1];
   if (!query) return null;
   const params = new URLSearchParams(query);
-  for (const name of ["type", "section", "category", "status", "provider", "mode"]) {
+  for (const name of ["type", "section", "tab", "category", "status", "provider", "mode"]) {
     const value = params.get(name);
     if (value) return value;
   }
