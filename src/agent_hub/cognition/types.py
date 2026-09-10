@@ -190,6 +190,7 @@ class BeliefRecord(BaseModel):
     last_verified_at: datetime | None = None
     verification_count: int = Field(default=0, ge=0)
     status: BeliefStatus = BeliefStatus.CANDIDATE
+    version: int = Field(default=1, ge=1)
     created_at: datetime = Field(default_factory=lambda: datetime.now().astimezone())
     updated_at: datetime = Field(default_factory=lambda: datetime.now().astimezone())
 
@@ -263,6 +264,9 @@ class ProtectedChangeProposal(BaseModel):
     target: str = Field(min_length=1, max_length=128)
     proposed_change: str = Field(min_length=1, max_length=2000)
     evidence_refs: tuple[EvidenceRef, ...] = Field(min_length=1, max_length=16)
+    confidence: float = Field(default=0.5, ge=0, le=1)
+    status: CognitiveRecordStatus = CognitiveRecordStatus.CANDIDATE
+    version: int = Field(default=1, ge=1)
     requires_approval: bool = True
     created_at: datetime = Field(default_factory=lambda: datetime.now().astimezone())
 

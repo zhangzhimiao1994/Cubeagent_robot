@@ -4,13 +4,16 @@ from uuid import uuid4
 import pytest
 
 from agent_hub.cognition.types import (
+    BeliefRecord,
     CognitiveEpisode,
+    CognitiveRecordStatus,
     CognitiveSource,
     EpisodeOutcome,
     EpisodeSignal,
     EvidenceRef,
     ExperienceKind,
     ExperienceRecord,
+    ProtectedChangeProposal,
 )
 
 
@@ -48,3 +51,32 @@ def test_episode_accepts_structured_feedback_signal() -> None:
 
     assert episode.source is CognitiveSource.VOICE
     assert episode.signals == (EpisodeSignal.USER_INTERRUPTED,)
+
+
+def test_belief_record_has_reviewable_version_metadata() -> None:
+    record = BeliefRecord(
+        tenant_id=uuid4(),
+        user_id=uuid4(),
+        subject="user",
+        predicate="prefers",
+        object="concise replies",
+        evidence_refs=(EvidenceRef(kind="conversation", ref_id="conv-1", summary="feedback"),),
+        version=1,
+    )
+
+    assert record.version == 1
+
+
+def test_protected_change_proposal_has_reviewable_metadata() -> None:
+    proposal = ProtectedChangeProposal(
+        target="self_model",
+        proposed_change="Update capability boundary after repeated evidence.",
+        evidence_refs=(EvidenceRef(kind="conversation", ref_id="conv-1", summary="review"),),
+        confidence=0.5,
+        status=CognitiveRecordStatus.CANDIDATE,
+        version=1,
+    )
+
+    assert proposal.requires_approval is True
+    assert proposal.status is CognitiveRecordStatus.CANDIDATE
+    assert proposal.version == 1
