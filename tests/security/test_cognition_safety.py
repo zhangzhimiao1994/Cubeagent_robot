@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from agent_hub.app import create_app
@@ -90,10 +90,7 @@ def _headers(token: str) -> dict[str, str]:
 
 def _api_client(
     principals: dict[str, AuthenticatedPrincipal],
-) -> tuple[
-    TestClient,
-    Callable[[UUID, UUID], InMemoryCognitionRepository],
-]:
+) -> FastAPI:
     repositories: dict[tuple[UUID, UUID], InMemoryCognitionRepository] = {}
 
     def repository_factory(
@@ -118,7 +115,7 @@ def _api_client(
         run_service=object(),
     )
     app.state.cognition_repository_factory = repository_factory
-    return TestClient(app), repository_factory
+    return app
 
 
 @pytest.mark.asyncio
@@ -161,7 +158,9 @@ async def test_ordinary_reflection_cannot_mutate_protected_self_model() -> None:
         capability_boundaries=("Ordinary reflections cannot change core identity or permissions.",),
         evidence_refs=(_evidence("self-model-baseline"),),
     )
-    await repository.upsert("self_model", "current", baseline.model_dump(mode="json"))
+    protected_self_model = await repository.upsert(
+        "self_model", "current", baseline.model_dump(mode="json")
+    )
 
     await ExperienceStore(repository).record_episode(
         _episode(
@@ -174,12 +173,11 @@ async def test_ordinary_reflection_cannot_mutate_protected_self_model() -> None:
         )
     )
 
-    stored_self_model = await repository.get("self_model", "current")
-
-    assert stored_self_model is not None
-    assert stored_self_model["identity"] == baseline.identity
-    assert stored_self_model["protected"] is True
-    assert stored_self_model["version"] == 1
+    # The implemented cognition schema has no separate SOUL, persona, safety, or
+    # tool-permission records. Ordinary reflection must leave the protected core
+    # self-model as the sole protected record and create no change proposals.
+    assert await repository.get("self_model", "current") == protected_self_model
+    assert await repository.list("self_model") == (protected_self_model,)
     assert len(await repository.list("reflection")) == 1
     assert await repository.list("protected_change_proposal") == ()
 
@@ -188,38 +186,52 @@ def test_cognition_api_keeps_tenant_user_scopes_isolated() -> None:
     tenant_id = uuid4()
     principal_a = AuthenticatedPrincipal(uuid4(), tenant_id, Role.ADMIN)
     principal_b = AuthenticatedPrincipal(uuid4(), tenant_id, Role.ADMIN)
-    client, _ = _api_client({"token-a": principal_a, "token-b": principal_b})
+    different_tenant_principal = AuthenticatedPrincipal(uuid4(), uuid4(), Role.ADMIN)
+    app = _api_client(
+        {
+            "token-a": principal_a,
+            "token-b": principal_b,
+            "token-other-tenant": different_tenant_principal,
+        }
+    )
 
-    created = client.post(
-        "/api/v1/admin/cognition/episodes",
-        headers=_headers("token-a"),
-        json={
-            "tenant_id": str(uuid4()),
-            "user_id": str(uuid4()),
-            "source": "voice",
-            "conversation_id": "conv-voice",
-            "started_at": datetime(2026, 9, 10, 14, 0, tzinfo=UTC).isoformat(),
-            "summary": "User corrected the voice robot to answer more briefly.",
-            "signals": ["user_corrected"],
-            "outcome": "failure",
-            "feedback": "Please keep voice answers short next time.",
-            "evidence_refs": [_evidence("scope-event").model_dump(mode="json")],
-        },
-    )
-    visible_to_a = client.get(
-        "/api/v1/admin/cognition/episodes",
-        headers=_headers("token-a"),
-    )
-    visible_to_b = client.get(
-        "/api/v1/admin/cognition/episodes",
-        headers=_headers("token-b"),
-    )
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/v1/admin/cognition/episodes",
+            headers=_headers("token-a"),
+            json={
+                "tenant_id": str(uuid4()),
+                "user_id": str(uuid4()),
+                "source": "voice",
+                "conversation_id": "conv-voice",
+                "started_at": datetime(2026, 9, 10, 14, 0, tzinfo=UTC).isoformat(),
+                "summary": "User corrected the voice robot to answer more briefly.",
+                "signals": ["user_corrected"],
+                "outcome": "failure",
+                "feedback": "Please keep voice answers short next time.",
+                "evidence_refs": [_evidence("scope-event").model_dump(mode="json")],
+            },
+        )
+        visible_to_a = client.get(
+            "/api/v1/admin/cognition/episodes",
+            headers=_headers("token-a"),
+        )
+        visible_to_b = client.get(
+            "/api/v1/admin/cognition/episodes",
+            headers=_headers("token-b"),
+        )
+        visible_to_other_tenant = client.get(
+            "/api/v1/admin/cognition/episodes",
+            headers=_headers("token-other-tenant"),
+        )
 
     assert created.status_code == 200
     assert len(visible_to_a.json()) == 1
     assert visible_to_a.json()[0]["user_id"] == str(principal_a.user_id)
     assert visible_to_b.status_code == 200
     assert visible_to_b.json() == []
+    assert visible_to_other_tenant.status_code == 200
+    assert visible_to_other_tenant.json() == []
 
 
 @pytest.mark.asyncio
