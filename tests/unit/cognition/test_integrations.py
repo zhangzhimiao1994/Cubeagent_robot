@@ -178,6 +178,8 @@ def test_memory_candidate_from_belief_rejects_unsafe_or_unproven_beliefs() -> No
     belief = _belief()
 
     assert memory_candidate_from_belief(belief.model_copy(update={"confidence": 0.74})) is None
+    assert memory_candidate_from_belief(belief.model_copy(update={"status": BeliefStatus.CANDIDATE})) is None
+    assert memory_candidate_from_belief(belief.model_copy(update={"status": BeliefStatus.UNCERTAIN})) is None
     assert memory_candidate_from_belief(belief.model_copy(update={"status": BeliefStatus.CONTRADICTED})) is None
     assert memory_candidate_from_belief(belief.model_copy(update={"status": BeliefStatus.RETIRED})) is None
     assert memory_candidate_from_belief(belief.model_copy(update={"contradictions": (_evidence("conflict"),)})) is None

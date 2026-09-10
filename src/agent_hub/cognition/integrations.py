@@ -87,7 +87,7 @@ def evolution_request_from_experiences(
 def memory_candidate_from_belief(belief: BeliefRecord) -> dict[str, object] | None:
     if belief.confidence < 0.75:
         return None
-    if belief.status in {BeliefStatus.CONTRADICTED, BeliefStatus.RETIRED}:
+    if belief.status is not BeliefStatus.ACTIVE:
         return None
     if belief.contradictions:
         return None

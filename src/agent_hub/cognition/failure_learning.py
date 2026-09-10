@@ -4,14 +4,16 @@ import re
 
 _SAFE_TOKEN = re.compile(r"^[a-z][a-z0-9_:-]{0,63}$")
 _RAW_TOKEN_MARKERS = re.compile(
-    r"\b(address|bearer|exception|password|profile|secret|token|traceback|transcript)\b|sk-[a-z0-9_-]+",
-    re.IGNORECASE,
+    r"(?:^|_)(?:address|bearer|exception|password|profile|raw|secret|token|traceback|transcript)(?:_|$)|"
+    r"sk_[a-z0-9_:-]+"
 )
 
 
 def _safe_token(value: str, *, fallback: str) -> str:
     normalized = "_".join(value.strip().casefold().replace("-", "_").split())
-    if _RAW_TOKEN_MARKERS.search(value) is not None:
+    if normalized == "unexpected_exception":
+        return normalized
+    if _RAW_TOKEN_MARKERS.search(normalized) is not None:
         return fallback
     if _SAFE_TOKEN.fullmatch(normalized) is None:
         return fallback
@@ -24,10 +26,10 @@ def hermes_failure_observation(
     impact: str,
     strategy: str,
 ) -> dict[str, object]:
-    safe_stage = _safe_token(stage, fallback="unknown_stage")
-    safe_failure_class = _safe_token(failure_class, fallback="unknown_failure")
+    safe_stage = _safe_token(stage, fallback="unknown")
+    safe_failure_class = _safe_token(failure_class, fallback="unexpected_exception")
     safe_impact = _safe_token(impact, fallback="unknown_impact")
-    safe_strategy = _safe_token(strategy, fallback="unknown_strategy")
+    safe_strategy = _safe_token(strategy, fallback="require_review")
     return {
         "category": "scheduler",
         "outcome": "failure",
