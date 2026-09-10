@@ -2,7 +2,13 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from agent_hub.cognition.gates import LearningGateReason, learning_gate_decision
-from agent_hub.cognition.types import CognitiveEpisode, CognitiveSource, EpisodeOutcome, EpisodeSignal, EvidenceRef
+from agent_hub.cognition.types import (
+    CognitiveEpisode,
+    CognitiveSource,
+    EpisodeOutcome,
+    EpisodeSignal,
+    EvidenceRef,
+)
 
 
 def episode(summary: str, signals: tuple[EpisodeSignal, ...], outcome: EpisodeOutcome = EpisodeOutcome.NEUTRAL) -> CognitiveEpisode:
