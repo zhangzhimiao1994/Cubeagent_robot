@@ -145,3 +145,14 @@ def test_reflection_without_experience_has_empty_candidate_ids() -> None:
     reflection = ReflectionEngine().reflect(_episode())
 
     assert reflection.candidate_experience_ids == ()
+
+
+def test_reflection_rejects_empty_evidence_without_bypassing_validation() -> None:
+    episode = _episode(
+        signals=(EpisodeSignal.TASK_FAILED,),
+        outcome=EpisodeOutcome.FAILURE,
+        evidence_refs=(),
+    )
+
+    with pytest.raises(ValueError, match="evidence"):
+        ReflectionEngine().reflect(episode)

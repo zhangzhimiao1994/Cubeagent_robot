@@ -133,6 +133,28 @@ async def test_record_episode_does_not_persist_reflection_for_rejected_episode()
 
 
 @pytest.mark.asyncio
+async def test_record_episode_without_evidence_rejects_and_does_not_persist_reflection() -> None:
+    tenant_id, user_id, repository = _repository()
+    store = ExperienceStore(repository)
+    episode = CognitiveEpisode(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        source=CognitiveSource.TASK,
+        started_at=datetime(2026, 9, 10, 10, 0, tzinfo=UTC),
+        summary="Task failed after missing a deployment health check.",
+        signals=(EpisodeSignal.TASK_FAILED,),
+        outcome=EpisodeOutcome.FAILURE,
+        evidence_refs=(),
+    )
+
+    result = await store.record_episode(episode)
+
+    assert result.experience_created is False
+    assert result.rejection_reason == "missing_evidence"
+    assert await repository.list("reflection") == ()
+
+
+@pytest.mark.asyncio
 async def test_record_episode_always_persists_episode_before_gate_result() -> None:
     tenant_id, user_id, repository = _repository()
     store = ExperienceStore(repository)

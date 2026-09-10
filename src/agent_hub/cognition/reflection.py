@@ -16,22 +16,22 @@ class ReflectionEngine:
     def reflect(
         self, episode: CognitiveEpisode, experience: ExperienceRecord | None = None
     ) -> ReflectionRecord:
+        if not episode.evidence_refs:
+            raise ValueError("reflection requires at least one evidence reference")
+
         reflection_type, trigger = _reflection_type_and_trigger(episode)
-        values = {
-            "episode_id": episode.id,
-            "reflection_type": reflection_type,
-            "trigger": trigger,
-            "what_happened": episode.summary,
-            "why_it_happened": _why(episode),
-            "better_next_time": _better_next_time(episode),
-            "candidate_experience_ids": (experience.id,) if experience is not None else (),
-            "confidence": 0.72 if episode.evidence_refs else 0.45,
-            "requires_approval": False,
-            "evidence_refs": episode.evidence_refs,
-        }
-        if episode.evidence_refs:
-            return ReflectionRecord(**values)
-        return ReflectionRecord.model_construct(**values)
+        return ReflectionRecord(
+            episode_id=episode.id,
+            reflection_type=reflection_type,
+            trigger=trigger,
+            what_happened=episode.summary,
+            why_it_happened=_why(episode),
+            better_next_time=_better_next_time(episode),
+            candidate_experience_ids=(experience.id,) if experience is not None else (),
+            confidence=0.72,
+            requires_approval=False,
+            evidence_refs=episode.evidence_refs,
+        )
 
 
 def _reflection_type_and_trigger(

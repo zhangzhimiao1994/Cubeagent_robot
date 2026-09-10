@@ -43,10 +43,11 @@ class ExperienceStore:
 
         experience = self._candidate_experience_from_episode(episode, decision)
         await self._save_experience(experience)
-        reflection = ReflectionEngine().reflect(episode, experience)
-        await self._repository.upsert(
-            "reflection", str(reflection.id), reflection.model_dump(mode="json")
-        )
+        if experience.evidence_refs:
+            reflection = ReflectionEngine().reflect(episode, experience)
+            await self._repository.upsert(
+                "reflection", str(reflection.id), reflection.model_dump(mode="json")
+            )
         return EpisodeIngestResult(
             episode_stored=True,
             experience_created=True,
