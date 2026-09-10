@@ -133,3 +133,18 @@ def test_robot_ota_manifest_requires_bound_device_token() -> None:
     body = accepted.json()
     assert body["manifest"]["min_protocol_version"] == "1"
     assert body["decision"]["status"] in {"update_available", "up_to_date", "downgrade_blocked"}
+
+
+def test_robot_device_tokens_are_loaded_from_environment_when_settings_are_not_injected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENT_HUB_ROBOT_DEVICE_TOKENS", "pi-lab-01:robot-token")
+    client = TestClient(create_app())
+
+    response = client.get(
+        "/api/v1/robot/ota/manifest/pi-lab-01",
+        headers=_device_headers(),
+        params={"current_version": "2026.09.10+0", "protocol_version": "1"},
+    )
+
+    assert response.status_code == 200

@@ -949,8 +949,13 @@ def create_app(
     application.state.robot_session_registry = RobotSessionRegistry(
         responder=robot_responder.respond_text
     )
-    application.state.robot_device_tokens = RobotDeviceTokenStore.from_secret(
+    robot_device_tokens = (
         configured_settings.robot_device_tokens
+        if settings is not None
+        else Settings().robot_device_tokens
+    )
+    application.state.robot_device_tokens = RobotDeviceTokenStore.from_secret(
+        robot_device_tokens
     )
 
     async def refresh_channel_runtime_config(runtime_config: Mapping[str, str]) -> None:
