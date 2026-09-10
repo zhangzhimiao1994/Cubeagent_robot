@@ -26,7 +26,11 @@ ACTIVE_COGNITIVE_STATUSES = {
 ACTIVE_BELIEF_STATUSES = {BeliefStatus.ACTIVE, BeliefStatus.CANDIDATE}
 ACTIVE_WORLD_STATUSES = {"active", "pending"}
 SAFE_EXPERIENCE_LIMIT = 8
-DEFAULT_EXPERIENCE_LIMIT = 2
+_RETRIEVAL_STOP_WORDS = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "by", "can", "do", "for", "from",
+    "help", "i", "in", "is", "it", "me", "my", "of", "on", "or", "please", "that",
+    "the", "this", "to", "use", "user", "with", "you", "your",
+})
 
 
 class MemoryExperienceRouter:
@@ -70,6 +74,10 @@ class MemoryExperienceRouter:
             except ValidationError:
                 continue
             if record.status not in ACTIVE_COGNITIVE_STATUSES:
+                continue
+            if record.confidence < 0.45 or record.contradictions:
+                continue
+            if not (_terms(current_request) & _terms(f"{record.statement} {record.applicability}")):
                 continue
             scored.append((_experience_score(record, scene, current_request), record.updated_at, record))
         scored.sort(key=lambda item: (item[0], _timestamp(item[1])), reverse=True)
@@ -166,8 +174,6 @@ def _experience_score(record: ExperienceRecord, scene: str, current_request: str
 def _experience_limit(limit: int) -> int:
     if limit < 1:
         return 0
-    if limit == SAFE_EXPERIENCE_LIMIT:
-        return DEFAULT_EXPERIENCE_LIMIT
     return min(limit, SAFE_EXPERIENCE_LIMIT)
 
 
@@ -278,7 +284,11 @@ def _reasons(scene: str, current_request: str, experience_limit: int) -> list[st
 
 
 def _terms(text: str) -> set[str]:
-    return set(re.findall(r"[a-z0-9\u4e00-\u9fff]+", text.casefold()))
+    terms = set(re.findall(r"[a-z0-9]+", text.casefold())) - _RETRIEVAL_STOP_WORDS
+    # Overlapping CJK bigrams match natural sentences without a tokenizer dependency.
+    for word in re.findall(r"[\u3400-\u9fff]+", text):
+        terms.update(word[index : index + 2] for index in range(len(word) - 1))
+    return terms
 
 
 def _model_payload(payload: dict[str, object]) -> dict[str, object]:

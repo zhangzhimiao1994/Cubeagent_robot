@@ -1,8 +1,12 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TestApp } from "../app/router";
+import * as authModule from "../auth/AuthProvider";
+import { CognitionPage } from "./CognitionPage";
 
 const principal = {
   user_id: "11111111-1111-4111-8111-111111111111",
@@ -189,8 +193,83 @@ describe("CognitionPage", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     window.sessionStorage.clear();
     vi.unstubAllGlobals();
+  });
+
+  function scopedPage() {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const auth = { user: { ...principal, username: "owner", permissions: ["*"] }, loading: false,
+      hasPermission: () => true, login: vi.fn(), logout: vi.fn(), setup: vi.fn() };
+    const spy = vi.spyOn(authModule, "useAuth").mockReturnValue(auth);
+    const tree = () => <QueryClientProvider client={client}><MemoryRouter><CognitionPage /></MemoryRouter></QueryClientProvider>;
+    const view = render(tree());
+    return { client, auth, spy, rerender: () => view.rerender(tree()) };
+  }
+
+  it.each(["user_id", "tenant_id"] as const)("hides cached records immediately when %s changes", async (field) => {
+    const { auth, spy, rerender } = scopedPage();
+    await screen.findByText("Use shorter voice replies.");
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    spy.mockReturnValue({ ...auth, user: { ...auth.user, [field]: "22222222-2222-4222-8222-222222222222" } });
+    rerender();
+    expect(screen.queryByText("Use shorter voice replies.")).toBeNull();
+  });
+
+  it("hides cached records when a refetch returns 403", async () => {
+    const { client } = scopedPage();
+    await screen.findByText("Use shorter voice replies.");
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(
+      { error: { code: "forbidden", message: "Access denied" } }, { status: 403 })));
+    await act(async () => { await client.invalidateQueries({ queryKey: ["cognition"] }); });
+    await screen.findByRole("alert");
+    expect(screen.queryByText("Use shorter voice replies.")).toBeNull();
+  });
+
+  it("hides records and preview when permission is revoked", async () => {
+    const { auth, spy, rerender } = scopedPage();
+    const user = userEvent.setup();
+    await screen.findByText("Use shorter voice replies.");
+    await user.click(screen.getByRole("tab", { name: "Router Preview" }));
+    await user.click(screen.getByRole("button", { name: "预览上下文" }));
+    await screen.findByText("Owner prefers direct technical updates.");
+    spy.mockReturnValue({ ...auth, hasPermission: () => false });
+    rerender();
+    expect(screen.queryByText("Owner prefers direct technical updates.")).toBeNull();
+    expect(screen.queryByText("Use shorter voice replies.")).toBeNull();
+  });
+
+  it("discards an old account's late router preview response", async () => {
+    const { auth, spy, rerender } = scopedPage();
+    const user = userEvent.setup();
+    await screen.findByText("Use shorter voice replies.");
+    await user.click(screen.getByRole("tab", { name: "Router Preview" }));
+    let resolvePreview!: (value: Response) => void;
+    const original = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn((input, init) => String(input).endsWith("router-preview")
+      ? new Promise<Response>((resolve) => { resolvePreview = resolve; }) : original(input, init)));
+    await user.click(screen.getByRole("button", { name: "预览上下文" }));
+    spy.mockReturnValue({ ...auth, user: { ...auth.user, user_id: "22222222-2222-4222-8222-222222222222" } });
+    rerender();
+    await act(async () => resolvePreview(jsonResponse({ core_constraints: [], relationship_context: [],
+      world_context: [], experience_context: ["private late preview"], belief_context: [], skill_context: [], reasons: [] })));
+    expect(screen.queryByText("private late preview")).toBeNull();
+  });
+
+  it("hides prior preview and records after preview authorization fails", async () => {
+    scopedPage();
+    const user = userEvent.setup();
+    await screen.findByText("Use shorter voice replies.");
+    await user.click(screen.getByRole("tab", { name: "Router Preview" }));
+    await user.click(screen.getByRole("button", { name: "预览上下文" }));
+    await screen.findByText("Owner prefers direct technical updates.");
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(
+      { error: { code: "forbidden", message: "Access denied" } }, { status: 403 })));
+    await user.click(screen.getByRole("button", { name: "预览上下文" }));
+    await screen.findByRole("alert");
+    expect(screen.queryByText("Owner prefers direct technical updates.")).toBeNull();
+    expect(screen.queryByText("Use shorter voice replies.")).toBeNull();
   });
 
   it("loads cognition page and renders sparse learning records", async () => {

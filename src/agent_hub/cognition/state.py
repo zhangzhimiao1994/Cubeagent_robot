@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from uuid import UUID
 
+from agent_hub.cognition.evidence import contains_evidence, merge_evidence, validated_update
 from agent_hub.cognition.repository import CognitionRepository
 from agent_hub.cognition.types import (
     BeliefRecord,
@@ -38,6 +39,7 @@ class BeliefService:
         scope: str,
         evidence: EvidenceRef,
     ) -> BeliefRecord:
+        merge_evidence((), (evidence,))
         existing = await self._find_matching_belief(
             subject=subject,
             predicate=predicate,
@@ -58,13 +60,16 @@ class BeliefService:
             )
             return await self._persist_belief(belief)
 
+        if contains_evidence((*existing.evidence_refs, *existing.contradictions), evidence):
+            return existing
         now = _advanced_now(existing.updated_at)
         confidence = _clamp_score(existing.confidence + 0.07)
         status = BeliefStatus.ACTIVE if confidence >= 0.75 else _candidate_or_uncertain(existing.status)
-        updated = existing.model_copy(
+        updated = validated_update(
+            existing,
             update={
                 "confidence": confidence,
-                "evidence_refs": (*existing.evidence_refs, evidence),
+                "evidence_refs": merge_evidence(existing.evidence_refs, (evidence,)),
                 "verification_count": existing.verification_count + 1,
                 "last_verified_at": now,
                 "status": status,
@@ -75,18 +80,22 @@ class BeliefService:
         return await self._persist_belief(updated)
 
     async def apply_contradiction(self, belief_id: UUID, evidence: EvidenceRef) -> BeliefRecord:
+        merge_evidence((), (evidence,))
         payload = await self._repository.get(BELIEF_RECORD_TYPE, str(belief_id))
         if payload is None:
             raise LookupError(f"belief {belief_id} was not found")
 
         belief = _belief_from_payload(payload)
+        if contains_evidence(belief.contradictions, evidence):
+            return belief
         now = _advanced_now(belief.updated_at)
         confidence = _clamp_score(belief.confidence - 0.15)
         status = BeliefStatus.CONTRADICTED if confidence < 0.35 else BeliefStatus.UNCERTAIN
-        updated = belief.model_copy(
+        updated = validated_update(
+            belief,
             update={
                 "confidence": confidence,
-                "contradictions": (*belief.contradictions, evidence),
+                "contradictions": merge_evidence(belief.contradictions, (evidence,)),
                 "status": status,
                 "version": belief.version + 1,
                 "updated_at": now,
@@ -128,7 +137,7 @@ class RelationshipService:
 
     async def update_from_experience(self, experience: ExperienceRecord) -> RelationshipState:
         existing = await self._load_relationship(experience.tenant_id, experience.user_id)
-        evidence_refs = experience.evidence_refs
+        evidence_refs = merge_evidence((), experience.evidence_refs, limit=32)
         now = _now()
         if existing is None:
             relationship = RelationshipState(
@@ -143,7 +152,8 @@ class RelationshipService:
             return await self._persist_relationship(relationship)
 
         now = _advanced_now(existing.last_updated_at)
-        updated = existing.model_copy(
+        updated = validated_update(
+            existing,
             update={
                 "familiarity": _familiarity_delta(existing.familiarity, experience),
                 "trust": _trust_delta(existing.trust, experience),
@@ -151,7 +161,7 @@ class RelationshipService:
                     experience,
                     current=existing.preferred_depth,
                 ),
-                "evidence_refs": (*existing.evidence_refs, *evidence_refs),
+                "evidence_refs": merge_evidence(existing.evidence_refs, evidence_refs, limit=32),
                 "version": existing.version + 1,
                 "last_updated_at": now,
             }
@@ -198,7 +208,7 @@ class WorldStateService:
             {
                 **item.model_dump(mode="json"),
                 "status": status,
-                "evidence_refs": (*item.evidence_refs, evidence),
+                "evidence_refs": merge_evidence(item.evidence_refs, (evidence,)),
                 "last_verified_at": now,
                 "version": item.version + 1,
                 "updated_at": now,
@@ -250,7 +260,10 @@ def _world_state_from_payload(payload: dict[str, object]) -> WorldStateItem:
 
 
 def _proposal_from_payload(payload: dict[str, object]) -> ProtectedChangeProposal:
-    return ProtectedChangeProposal.model_validate(_model_payload(payload))
+    values = _model_payload(payload)
+    values.pop("tenant_id", None)
+    values.pop("user_id", None)
+    return ProtectedChangeProposal.model_validate(values)
 
 
 def _model_payload(payload: dict[str, object]) -> dict[str, object]:

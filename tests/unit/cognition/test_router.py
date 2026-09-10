@@ -107,7 +107,7 @@ async def test_router_scores_filters_and_renders_experience_context() -> None:
 
     assert "Voice deployment debugging should start" in bundle.experience_context[0]
     assert "Stale deployment debugging advice" not in rendered
-    assert "contradicted low confidence" in rendered
+    assert "contradicted low confidence" not in rendered
     assert rendered.startswith("<COGNITIVE_CONTEXT>")
     assert rendered.endswith("</COGNITIVE_CONTEXT>")
 

@@ -243,6 +243,23 @@ def test_experience_outcome_updates_counts_and_missing_experience_returns_404() 
     assert missing.status_code == 404
 
 
+def test_unsafe_outcome_returns_bounded_422_without_changing_experience() -> None:
+    client, _, _ = _client(Role.ADMIN)
+    with client:
+        created = client.post("/api/v1/admin/cognition/episodes", headers=_headers(), json=_episode_payload())
+        experience = created.json()["experience"]
+        response = client.post(
+            f"/api/v1/admin/cognition/experiences/{experience['id']}/outcome",
+            headers=_headers(), json={"succeeded": True, "evidence": {
+                "kind": "run", "ref_id": "outcome", "summary": "password=private",
+            }},
+        )
+        assert response.status_code == 422
+        assert "password=" not in response.text
+        stored = client.get("/api/v1/admin/cognition/experiences", headers=_headers()).json()
+        assert stored == [experience]
+
+
 def test_list_reflections_accepts_production_scoped_payload() -> None:
     client, principal, repository_factory = _client(Role.ADMIN)
     repository = repository_factory(tenant_id=principal.tenant_id, user_id=principal.user_id)

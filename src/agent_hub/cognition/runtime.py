@@ -15,6 +15,7 @@ from agent_hub.domain.runs import RunStatus
 
 _DEFAULT_ADVICE_TIMEOUT_SECONDS = 0.8
 _DEFAULT_OUTCOME_TIMEOUT_SECONDS = 0.8
+_FAILURE_FEEDBACK_TIMEOUT_SECONDS = 0.2
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -81,19 +82,23 @@ async def safe_cognitive_context_text(
         )
         return render_cognitive_context(bundle)
     except TimeoutError:
-        _LOGGER.warning("cognitive_advice_timeout tenant_id=%s scene=%s", tenant_id, scene)
+        _LOGGER.warning("cognitive_advice_timeout failure_class=timeout")
         await _record_failure_observation(
             hermes_failure_sink,
+            tenant_id=tenant_id,
+            user_id=user_id,
             stage="advice",
             failure_class="timeout",
             impact="advice_skipped",
             strategy="fallback_to_memory_only",
         )
         return ""
-    except Exception:
-        _LOGGER.exception("cognitive_advice_failed tenant_id=%s scene=%s", tenant_id, scene)
+    except Exception:  # noqa: BLE001 - isolate failures without logging private exception text
+        _LOGGER.error("cognitive_advice_failed failure_class=unexpected_exception")
         await _record_failure_observation(
             hermes_failure_sink,
+            tenant_id=tenant_id,
+            user_id=user_id,
             stage="advice",
             failure_class="unexpected_exception",
             impact="advice_skipped",
@@ -131,18 +136,22 @@ async def safe_cognitive_outcome_ingest(
             timeout=timeout_seconds,
         )
     except TimeoutError:
-        _LOGGER.warning("cognitive_outcome_ingest_timeout run_id=%s", run_id)
+        _LOGGER.warning("cognitive_outcome_ingest_timeout failure_class=timeout")
         await _record_failure_observation(
             hermes_failure_sink,
+            tenant_id=tenant_id,
+            user_id=user_id,
             stage="outcome_ingest",
             failure_class="timeout",
             impact="outcome_ingest_skipped",
             strategy="retry_later",
         )
-    except Exception:
-        _LOGGER.exception("cognitive_outcome_ingest_failed run_id=%s", run_id)
+    except Exception:  # noqa: BLE001 - isolate failures without logging private exception text
+        _LOGGER.error("cognitive_outcome_ingest_failed failure_class=unexpected_exception")
         await _record_failure_observation(
             hermes_failure_sink,
+            tenant_id=tenant_id,
+            user_id=user_id,
             stage="outcome_ingest",
             failure_class="unexpected_exception",
             impact="outcome_ingest_skipped",
@@ -153,15 +162,14 @@ async def safe_cognitive_outcome_ingest(
 async def _record_failure_observation(
     sink: object | None,
     *,
+    tenant_id: UUID,
+    user_id: UUID | None,
     stage: str,
     failure_class: str,
     impact: str,
     strategy: str,
 ) -> None:
     if sink is None:
-        return
-    recorder = getattr(sink, "record_hermes_feedback", None)
-    if not callable(recorder):
         return
     payload = hermes_failure_observation(
         stage=stage,
@@ -170,9 +178,23 @@ async def _record_failure_observation(
         strategy=strategy,
     )
     try:
-        result = recorder(payload)
+        scoped_recorder = getattr(sink, "record_cognition_failure", None)
+        if callable(scoped_recorder):
+            result = scoped_recorder(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                stage=stage,
+                failure_class=failure_class,
+                impact=impact,
+                strategy=strategy,
+            )
+        else:
+            recorder = getattr(sink, "record_hermes_feedback", None)
+            if not callable(recorder):
+                return
+            result = recorder(payload)
         if inspect.isawaitable(result):
-            await result
+            await asyncio.wait_for(result, timeout=_FAILURE_FEEDBACK_TIMEOUT_SECONDS)
     except Exception:  # noqa: BLE001 - failure recording is best effort only
         return
 

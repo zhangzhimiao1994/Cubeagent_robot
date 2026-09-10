@@ -111,6 +111,8 @@ async def post_experience_outcome(
         )
     except LookupError:
         raise PublicAPIError(404, "not_found", "not found") from None
+    except ValueError:
+        raise PublicAPIError(422, "invalid_evidence", "Evidence is unsafe or invalid") from None
 
 
 @router.get("/reflections", response_model=list[ReflectionRecord])

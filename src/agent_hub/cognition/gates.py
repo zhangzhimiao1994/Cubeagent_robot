@@ -49,7 +49,11 @@ def learning_gate_decision(episode: CognitiveEpisode) -> LearningGateDecision:
     if (
         rejects_unsafe_text(episode.summary)
         or rejects_unsafe_text(episode.feedback)
-        or any(rejects_unsafe_text(evidence.summary) for evidence in episode.evidence_refs)
+        or any(
+            rejects_unsafe_text(value)
+            for evidence in episode.evidence_refs
+            for value in (evidence.kind, evidence.ref_id, evidence.summary)
+        )
     ):
         return LearningGateDecision(accepted=False, reason=LearningGateReason.UNSAFE_CONTENT, confidence=1.0)
     if EpisodeSignal.SPEECH_RECOGNITION_UNCERTAIN in episode.signals and len(episode.signals) == 1:

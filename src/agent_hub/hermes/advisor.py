@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from agent_hub.cognition.failure_learning import hermes_failure_observation
 from agent_hub.db.models import AdminResourceRow
 from agent_hub.domain.runs import RunStatus, TaskMode
 from agent_hub.hermes.runtime_observation import is_runtime_observation_lesson
@@ -161,6 +162,28 @@ class PersistentHermesRunAdvisor:
         lesson_id = f"hermes_run_{uuid4().hex}"
         payload = _outcome_learning_payload(outcome, lesson_id=lesson_id)
         await self._upsert(outcome.tenant_id, lesson_id, payload)
+
+    async def record_cognition_failure(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID | None,
+        stage: str,
+        failure_class: str,
+        impact: str,
+        strategy: str,
+    ) -> None:
+        lesson_id = f"hermes_cognition_{uuid4().hex}"
+        payload = hermes_failure_observation(stage, failure_class, impact, strategy)
+        payload.update({
+            "id": lesson_id,
+            "user_id": str(user_id) if user_id is not None else None,
+            "created_at": datetime.now(UTC).isoformat(),
+            "confirmed_at": None,
+            "memory_type": "runtime_observation",
+            "target": "scheduler",
+        })
+        await self._upsert(tenant_id, lesson_id, payload)
 
     async def _enabled(self, tenant_id: UUID) -> bool:
         async with self._session_factory() as session:

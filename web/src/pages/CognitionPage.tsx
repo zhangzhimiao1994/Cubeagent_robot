@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 
 import {
   api,
+  ApiError,
   formatApiError,
   type CognitiveContextBundle,
   type CognitionBelief,
@@ -13,6 +14,7 @@ import {
   type CognitionRelationshipRecord,
   type CognitionWorldState,
 } from "../api/client";
+import { useAuth } from "../auth/AuthProvider";
 
 type CognitionTab = "episodes" | "experiences" | "reflections" | "beliefs" | "relationship" | "world" | "preview";
 
@@ -60,21 +62,30 @@ function queryError(queries: Array<{ error: unknown; isError: boolean }>) {
 }
 
 export function CognitionPage() {
+  const auth = useAuth();
+  if (auth.loading || !auth.user) return null;
+  if (!auth.hasPermission("cognition:read")) return <p role="alert">没有查看认知记录的权限</p>;
+  const scope = `${auth.user.tenant_id}:${auth.user.user_id}`;
+  return <ScopedCognitionPage key={scope} scope={scope} />;
+}
+
+function ScopedCognitionPage({ scope }: { scope: string }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<CognitionTab>(tabFromParam(searchParams.get("tab")));
-  const [scene, setScene] = useState("voice");
+  const [scene, setScene] = useState("voice_chat");
   const [currentRequest, setCurrentRequest] = useState("语音回复要短一点，并且保留关键动作。");
-  const [limit, setLimit] = useState("6");
+  const [limit, setLimit] = useState("8");
   const [preview, setPreview] = useState<CognitiveContextBundle | null>(null);
 
-  const episodesQuery = useQuery({ queryKey: ["cognition", "episodes"], queryFn: () => api.cognitionEpisodes() });
-  const experiencesQuery = useQuery({ queryKey: ["cognition", "experiences"], queryFn: () => api.cognitionExperiences() });
-  const reflectionsQuery = useQuery({ queryKey: ["cognition", "reflections"], queryFn: () => api.cognitionReflections() });
-  const beliefsQuery = useQuery({ queryKey: ["cognition", "beliefs"], queryFn: () => api.cognitionBeliefs() });
-  const relationshipQuery = useQuery({ queryKey: ["cognition", "relationship"], queryFn: () => api.cognitionRelationship() });
-  const worldQuery = useQuery({ queryKey: ["cognition", "world-state"], queryFn: () => api.cognitionWorldState() });
+  const episodesQuery = useQuery({ queryKey: ["cognition", scope, "episodes"], queryFn: () => api.cognitionEpisodes(), gcTime: 0 });
+  const experiencesQuery = useQuery({ queryKey: ["cognition", scope, "experiences"], queryFn: () => api.cognitionExperiences(), gcTime: 0 });
+  const reflectionsQuery = useQuery({ queryKey: ["cognition", scope, "reflections"], queryFn: () => api.cognitionReflections(), gcTime: 0 });
+  const beliefsQuery = useQuery({ queryKey: ["cognition", scope, "beliefs"], queryFn: () => api.cognitionBeliefs(), gcTime: 0 });
+  const relationshipQuery = useQuery({ queryKey: ["cognition", scope, "relationship"], queryFn: () => api.cognitionRelationship(), gcTime: 0 });
+  const worldQuery = useQuery({ queryKey: ["cognition", scope, "world-state"], queryFn: () => api.cognitionWorldState(), gcTime: 0 });
 
   const previewMutation = useMutation({
+    gcTime: 0,
     mutationFn: () =>
       api.cognitionRouterPreview({
         scene: scene.trim(),
@@ -82,6 +93,7 @@ export function CognitionPage() {
         limit: Number(limit) || 1,
       }),
     onSuccess: (bundle) => setPreview(bundle),
+    onMutate: () => setPreview(null),
   });
 
   const episodes = episodesQuery.data ?? [];
@@ -114,6 +126,11 @@ export function CognitionPage() {
     event.preventDefault();
     if (!scene.trim() || !currentRequest.trim()) return;
     previewMutation.mutate();
+  }
+
+  if (failedLoad) return <p role="alert">{formatApiError(failedLoad, "认知记录加载失败")}</p>;
+  if (previewMutation.error instanceof ApiError && [401, 403].includes(previewMutation.error.status)) {
+    return <p role="alert">{formatApiError(previewMutation.error, "没有查看认知记录的权限")}</p>;
   }
 
   return (

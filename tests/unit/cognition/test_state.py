@@ -187,7 +187,7 @@ async def test_relationship_update_from_voice_experience_tracks_preferred_depth_
     assert second.trust == 0.56
     assert second.version == 2
     assert second.last_updated_at > first.last_updated_at
-    assert len(second.evidence_refs) == 2
+    assert second.evidence_refs == first.evidence_refs
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
+from agent_hub.cognition.evidence import merge_evidence, validated_update
 from agent_hub.cognition.gates import LearningGateDecision, learning_gate_decision
 from agent_hub.cognition.reflection import ReflectionEngine
 from agent_hub.cognition.repository import CognitionRepository
@@ -60,7 +61,8 @@ class ExperienceStore:
         experience = await self._load_experience(experience_id)
         now = _next_timestamp_after(experience.updated_at)
         confidence_delta = 0.05 if succeeded else -0.08
-        updated = experience.model_copy(
+        updated = validated_update(
+            experience,
             update={
                 "usage_count": experience.usage_count + 1,
                 "success_count": experience.success_count + (1 if succeeded else 0),
@@ -68,14 +70,14 @@ class ExperienceStore:
                 "last_used_at": now,
                 "last_verified_at": now if succeeded else experience.last_verified_at,
                 "evidence_refs": (
-                    (*experience.evidence_refs, evidence)
+                    merge_evidence(experience.evidence_refs, (evidence,))
                     if succeeded
                     else experience.evidence_refs
                 ),
                 "contradictions": (
                     experience.contradictions
                     if succeeded
-                    else (*experience.contradictions, evidence)
+                    else merge_evidence(experience.contradictions, (evidence,))
                 ),
                 "confidence": min(1.0, max(0.0, experience.confidence + confidence_delta)),
                 "version": experience.version + 1,
@@ -113,10 +115,10 @@ class ExperienceStore:
             tenant_id=episode.tenant_id,
             user_id=episode.user_id,
             kind=_experience_kind_from_episode(episode),
-            statement=episode.summary,
+            statement=episode.summary[:1000],
             applicability=_experience_applicability(episode),
             confidence=decision.confidence,
-            evidence_refs=episode.evidence_refs,
+            evidence_refs=merge_evidence((), episode.evidence_refs),
             status=CognitiveRecordStatus.CANDIDATE,
         )
 

@@ -150,9 +150,7 @@ async def test_safe_cognitive_outcome_ingest_times_out_without_blocking() -> Non
         timeout_seconds=0.01,
     )
 
-    assert sink.payloads[0]["lesson"].startswith(
-        "cognition_failure stage=outcome_ingest"
-    )
+    assert sink.payloads[0]["lesson"].startswith("cognition_failure stage=outcome_ingest")
     assert "failure_class=timeout" in str(sink.payloads[0]["lesson"])
 
 
@@ -178,3 +176,140 @@ def test_cognitive_artifact_is_runtime_only_guidance_not_source_material() -> No
 
     assert cognitive_context_text_from_artifacts(artifacts) == str(cognitive.content["text"])
     assert source_artifacts_without_cognitive_context(artifacts) == (source, spoofed)
+
+
+@pytest.mark.parametrize("stage", ["advice", "outcome"])
+async def test_cognition_failure_logs_never_contain_raw_exception(caplog, stage):
+    class Failing:
+        async def advise(self, **kwargs):
+            raise RuntimeError("password=super-secret")
+
+        async def ingest_run_outcome(self, **kwargs):
+            raise RuntimeError("password=super-secret")
+
+    if stage == "advice":
+        await safe_cognitive_context_text(
+            Failing(),
+            tenant_id=uuid4(),
+            user_id=uuid4(),
+            scene="password=scene-secret",
+            current_request="request",
+        )
+    else:
+        await safe_cognitive_outcome_ingest(
+            Failing(),
+            tenant_id=uuid4(),
+            user_id=uuid4(),
+            run_id=uuid4(),
+            status=RunStatus.FAILED,
+            request="request",
+            routing_decision={},
+        )
+    assert caplog.records
+    assert "password=" not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+async def test_hermes_failure_sink_has_independent_timeout():
+    cancelled = asyncio.Event()
+
+    class HangingSink:
+        async def record_hermes_feedback(self, payload):
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+    try:
+        await asyncio.wait_for(
+            safe_cognitive_outcome_ingest(
+                FailingCognitiveOutcomeIngester(),
+                tenant_id=uuid4(),
+                user_id=uuid4(),
+                run_id=uuid4(),
+                status=RunStatus.FAILED,
+                request="request",
+                routing_decision={},
+                hermes_failure_sink=HangingSink(),
+            ),
+            timeout=1.5,
+        )
+    except TimeoutError:
+        pytest.fail("failure recording exceeded independent timeout")
+    assert cancelled.is_set()
+
+
+async def test_production_hermes_advisor_persists_scoped_cognition_failure():
+    from agent_hub.hermes.advisor import PersistentHermesRunAdvisor, _lesson_is_conversation_advice
+
+    statements = []
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        def begin(self):
+            return self
+
+        async def execute(self, statement):
+            statements.append(statement)
+
+    advisor = PersistentHermesRunAdvisor(Session)
+    tenant, user = uuid4(), uuid4()
+    await safe_cognitive_outcome_ingest(
+        FailingCognitiveOutcomeIngester(),
+        tenant_id=tenant,
+        user_id=user,
+        run_id=uuid4(),
+        status=RunStatus.FAILED,
+        request="password=never-store",
+        routing_decision={},
+        hermes_failure_sink=advisor,
+    )
+    assert len(statements) == 1
+    params = statements[0].compile().params
+    assert params["tenant_id"] == tenant
+    assert params["kind"] == "hermes"
+    payload = params["payload"]
+    assert payload["user_id"] == str(user)
+    assert payload["confirmed_at"] is None
+    assert "cognition_failure" in payload["lesson"]
+    assert "password=" not in str(payload)
+    assert not _lesson_is_conversation_advice(payload)
+
+
+@pytest.mark.parametrize("persisted", ["plan", "events"])
+async def test_crew_private_context_only_enters_prompt_not_plan_or_events(persisted):
+    from agent_hub.domain.runs import TaskMode
+    from agent_hub.runtime.contracts import TaskContext
+    from agent_hub.runtime.crew.adapter import CrewDispatchRuntime
+    from agent_hub.runtime.defaults import _dispatch_plan
+    from tests.integration.runtime.test_crew_adapter import FakeGateway, FastFactory
+
+    private = "private-cognitive-owner-detail"
+    context = TaskContext(
+        run_id=uuid4(),
+        tenant_id=uuid4(),
+        mode=TaskMode.DISPATCH,
+        request="deployment checks",
+        artifacts=(cognitive_context_artifact(private),),
+        token_budget=10000,
+        timeout_seconds=30,
+    )
+    plan = _dispatch_plan((), context)
+    gateway = FakeGateway()
+    runtime = CrewDispatchRuntime(gateway, plan, crew_factory=FastFactory())
+    events = [event async for event in runtime.run(context)]
+    assert gateway.requests
+    assert any(
+        private in str(message.content)
+        for request in gateway.requests
+        for message in request.messages
+    )
+    if persisted == "plan":
+        assert private not in plan.model_dump_json()
+    else:
+        assert all(private not in event.model_dump_json() for event in events)
