@@ -10,6 +10,7 @@ Token handling: use only the server-configured robot token at test time; do not 
 
 - [ ] Confirm prod-web-02 is reachable on port 32020 from the test network.
 - [ ] Confirm the configured server token maps to `pi-lab-01`.
+- [ ] Keep the default no-proxy behavior for the probe unless a controlled network test explicitly requires `--allow-proxy`.
 - [ ] Run the hardware-free probe from this repository:
 
 ```bash
@@ -17,6 +18,7 @@ python tools/robot_voice_probe.py --base-url http://103.236.93.62:32020 --device
 ```
 
 - [ ] Confirm the probe reports an OTA manifest response and a WebSocket `assistant.text.done` response.
+- [ ] Confirm the probe reports the `/api/v1/auth/login` path as reachable before relying on the debug surface.
 - [ ] If `websocket-client` is missing, install it only in the local test environment or run the probe from the Pi runtime environment where it is already available.
 
 ## Pi Runtime Setup

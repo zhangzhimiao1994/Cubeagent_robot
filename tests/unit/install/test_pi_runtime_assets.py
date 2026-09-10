@@ -57,6 +57,32 @@ def test_robot_voice_probe_asset_documents_required_cli_and_robot_protocol_paths
         assert required in text
 
 
+def test_robot_voice_probe_checks_login_path_and_bypasses_proxies_by_default() -> None:
+    text = (Path("tools") / "robot_voice_probe.py").read_text(encoding="utf-8")
+
+    for required in (
+        "/api/v1/auth/login",
+        "--no-proxy",
+        "default=True",
+        "ProxyHandler({})",
+        "http_proxy_host=None",
+        "http_proxy_port=None",
+    ):
+        assert required in text
+
+
+def test_robot_voice_probe_waits_for_final_assistant_websocket_frame() -> None:
+    text = (Path("tools") / "robot_voice_probe.py").read_text(encoding="utf-8")
+
+    for required in (
+        "--max-ws-frames",
+        "for _frame_number in range(max_ws_frames):",
+        "assistant.text.done",
+        "ignored_types",
+    ):
+        assert required in text
+
+
 def test_robot_field_test_checklist_covers_2026_09_12_production_runbook() -> None:
     checklist = Path("docs") / "robot-field-test.md"
     assert checklist.exists(), checklist

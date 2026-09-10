@@ -1,8 +1,8 @@
 """Hardware-free Robot Protocol v1 voice probe.
 
-The probe performs an authenticated OTA manifest HTTP request first, then
-optionally opens the Robot Protocol v1 WebSocket and sends a heartbeat plus one
-final text utterance. It never prints the supplied device token.
+The probe performs OTA manifest and login HTTP checks first, then optionally
+opens the Robot Protocol v1 WebSocket and sends a heartbeat plus one final text
+utterance. It never prints the supplied device token.
 """
 
 from __future__ import annotations
@@ -15,12 +15,14 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 from uuid import uuid4
 
 ROBOT_WS_PREFIX = "/api/v1/robot/ws/"
 ROBOT_OTA_PREFIX = "/api/v1/robot/ota/manifest/"
+LOGIN_PATH = "/api/v1/auth/login"
 BODY_LIMIT = 700
+LOGIN_REACHABLE_STATUS_CODES = {400, 401, 403, 422, 429}
 
 
 class ProbeError(RuntimeError):
@@ -33,6 +35,7 @@ def main(argv: list[str] | None = None) -> int:
     result: dict[str, Any] = {
         "device_id": args.device_id,
         "ota_manifest": {},
+        "login": {},
         "websocket": {},
     }
 
@@ -42,9 +45,19 @@ def main(argv: list[str] | None = None) -> int:
             device_id=args.device_id,
             device_token=args.device_token,
             timeout_seconds=args.timeout_seconds,
+            no_proxy=args.no_proxy,
         )
     except ProbeError as exc:
         result["ota_manifest"] = {"ok": False, "error": str(exc)}
+
+    try:
+        result["login"] = probe_login_path(
+            base_url=base_url,
+            timeout_seconds=args.timeout_seconds,
+            no_proxy=args.no_proxy,
+        )
+    except ProbeError as exc:
+        result["login"] = {"ok": False, "error": str(exc)}
 
     try:
         result["websocket"] = probe_websocket(
@@ -54,12 +67,20 @@ def main(argv: list[str] | None = None) -> int:
             session_id=args.session_id,
             utterance=args.utterance,
             timeout_seconds=args.timeout_seconds,
+            max_ws_frames=args.max_ws_frames,
+            no_proxy=args.no_proxy,
         )
     except ProbeError as exc:
         result["websocket"] = {"ok": False, "error": str(exc)}
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0 if result["ota_manifest"].get("ok") and result["websocket"].get("ok") else 1
+    return (
+        0
+        if result["ota_manifest"].get("ok")
+        and result["login"].get("ok")
+        and result["websocket"].get("ok")
+        else 1
+    )
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -72,6 +93,20 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--utterance", required=True, help="Final text utterance to send over WebSocket")
     parser.add_argument("--session-id", default="probe-session", help="Robot Protocol v1 session id")
     parser.add_argument("--timeout-seconds", type=float, default=10.0, help="HTTP and WS timeout")
+    parser.add_argument("--max-ws-frames", type=int, default=8, help="Maximum WS frames to read for final text")
+    parser.add_argument(
+        "--no-proxy",
+        dest="no_proxy",
+        action="store_true",
+        default=True,
+        help="Bypass environment proxies for production/debug robot endpoints; default on",
+    )
+    parser.add_argument(
+        "--allow-proxy",
+        dest="no_proxy",
+        action="store_false",
+        help="Allow configured environment proxies",
+    )
     return parser.parse_args(argv)
 
 
@@ -88,12 +123,13 @@ def probe_ota_manifest(
     device_id: str,
     device_token: str,
     timeout_seconds: float,
+    no_proxy: bool,
 ) -> dict[str, Any]:
     query = urlencode({"current_version": "probe", "protocol_version": "1"})
     url = f"{http_base_url(base_url)}{ROBOT_OTA_PREFIX}{quote(device_id, safe='')}?{query}"
     request = Request(url, headers={"X-Robot-Device-Token": device_token})
     try:
-        with urlopen(request, timeout=timeout_seconds) as response:
+        with open_http(request, timeout_seconds=timeout_seconds, no_proxy=no_proxy) as response:
             body = response.read(BODY_LIMIT + 1).decode("utf-8", errors="replace")
             payload = parse_json_body(body)
             return {
@@ -109,6 +145,37 @@ def probe_ota_manifest(
         raise ProbeError(f"OTA manifest request failed: {truncate(str(exc))}") from exc
 
 
+def probe_login_path(
+    *,
+    base_url: str,
+    timeout_seconds: float,
+    no_proxy: bool,
+) -> dict[str, Any]:
+    request = Request(
+        f"{http_base_url(base_url)}{LOGIN_PATH}",
+        data=b"{}",
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with open_http(request, timeout_seconds=timeout_seconds, no_proxy=no_proxy) as response:
+            body = response.read(BODY_LIMIT + 1).decode("utf-8", errors="replace")
+            return {
+                "ok": 200 <= response.status < 500,
+                "status": response.status,
+                "body_preview": truncate(body),
+            }
+    except HTTPError as exc:
+        body = exc.read(BODY_LIMIT + 1).decode("utf-8", errors="replace")
+        return {
+            "ok": exc.code in LOGIN_REACHABLE_STATUS_CODES,
+            "status": exc.code,
+            "body_preview": truncate(body),
+        }
+    except (TimeoutError, socket.timeout, URLError, OSError) as exc:
+        raise ProbeError(f"login request failed: {truncate(str(exc))}") from exc
+
+
 def probe_websocket(
     *,
     base_url: str,
@@ -117,6 +184,8 @@ def probe_websocket(
     session_id: str,
     utterance: str,
     timeout_seconds: float,
+    max_ws_frames: int,
+    no_proxy: bool,
 ) -> dict[str, Any]:
     try:
         from websocket import WebSocketTimeoutException, create_connection
@@ -133,6 +202,7 @@ def probe_websocket(
             url,
             header=[f"X-Robot-Device-Token: {device_token}"],
             timeout=timeout_seconds,
+            **websocket_proxy_options(no_proxy),
         )
         sent_types = ["device.heartbeat", "speech.partial"]
         socket_handle.send(
@@ -157,19 +227,8 @@ def probe_websocket(
                 ensure_ascii=False,
             )
         )
-        raw_response = socket_handle.recv()
-        if isinstance(raw_response, bytes):
-            raw_response = raw_response.decode("utf-8", errors="replace")
-        payload = parse_json_body(str(raw_response))
-        response_type = payload.get("type") if isinstance(payload, dict) else None
-        response_payload = payload.get("payload") if isinstance(payload, dict) else None
-        response_text = response_payload.get("text") if isinstance(response_payload, dict) else None
-        return {
-            "ok": response_type == "assistant.text.done",
-            "sent_types": sent_types,
-            "received_type": response_type,
-            "received_text": response_text if isinstance(response_text, str) else None,
-        }
+        final_frame = receive_final_assistant_frame(socket_handle, max_ws_frames=max_ws_frames)
+        return {"ok": True, "sent_types": sent_types, **final_frame}
     except WebSocketTimeoutException as exc:
         raise ProbeError("WebSocket timed out waiting for assistant.text.done") from exc
     except Exception as exc:
@@ -177,6 +236,30 @@ def probe_websocket(
     finally:
         if socket_handle is not None:
             socket_handle.close()
+
+
+def receive_final_assistant_frame(socket_handle: Any, *, max_ws_frames: int) -> dict[str, Any]:
+    ignored_types: list[str] = []
+    for _frame_number in range(max_ws_frames):
+        raw_response = socket_handle.recv()
+        if isinstance(raw_response, bytes):
+            raw_response = raw_response.decode("utf-8", errors="replace")
+        payload = parse_json_body(str(raw_response))
+        response_type = payload.get("type") if isinstance(payload, dict) else None
+        if response_type == "assistant.text.done":
+            response_payload = payload.get("payload") if isinstance(payload, dict) else None
+            response_text = response_payload.get("text") if isinstance(response_payload, dict) else None
+            return {
+                "received_type": response_type,
+                "received_text": response_text if isinstance(response_text, str) else None,
+                "ignored_types": ignored_types,
+            }
+        if isinstance(response_type, str):
+            ignored_types.append(response_type)
+    raise ProbeError(
+        "WebSocket did not receive assistant.text.done within "
+        f"{max_ws_frames} frames; ignored_types={ignored_types}"
+    )
 
 
 def build_envelope(
@@ -195,6 +278,21 @@ def build_envelope(
         "type": message_type,
         "payload": payload,
     }
+
+
+def open_http(request: Request, *, timeout_seconds: float, no_proxy: bool) -> Any:
+    opener = build_opener(ProxyHandler({})) if no_proxy else build_opener()
+    return opener.open(request, timeout=timeout_seconds)
+
+
+def websocket_proxy_options(no_proxy: bool) -> dict[str, object]:
+    if not no_proxy:
+        return {}
+    return dict(
+        http_proxy_host=None,
+        http_proxy_port=None,
+        http_no_proxy=["*"],
+    )
 
 
 def http_base_url(base_url: str) -> str:
