@@ -105,6 +105,19 @@ def test_context_builder_uses_deterministic_priority_order() -> None:
     ]
 
 
+def test_context_builder_includes_bounded_cognitive_context() -> None:
+    built = ContextBuilder().build(
+        ContextBuildInput(
+            system_policy="policy",
+            current_user_request="debug voice robot",
+            cognitive_context="<COGNITIVE_CONTEXT>[]</COGNITIVE_CONTEXT>",
+        ),
+        token_budget=200,
+    )
+
+    assert any(section.name == "cognitive_context" for section in built.sections)
+
+
 def test_knowledge_prompt_injection_is_labeled_in_context() -> None:
     context = ContextBuilder().build(
         ContextBuildInput(

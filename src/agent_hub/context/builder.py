@@ -29,6 +29,7 @@ class ContextBuildInput:
     approvals: tuple[str, ...] = ()
     active_plan: str | None = None
     checkpoint: str | None = None
+    cognitive_context: str | None = None
     memories: tuple[MemoryRecord, ...] = ()
     knowledge_hits: tuple[KnowledgeHit, ...] = ()
     recent_transcript: tuple[str, ...] = ()
@@ -67,6 +68,8 @@ def _candidate_sections(value: ContextBuildInput) -> list[ContextSection]:
         sections.append(_section("active_plan", value.active_plan, 50))
     if value.checkpoint:
         sections.append(_section("checkpoint", value.checkpoint, 51))
+    if value.cognitive_context:
+        sections.append(_section("cognitive_context", value.cognitive_context, 55))
     sections.extend(
         _section("core_memory", _render_memory(memory), 60)
         for memory in value.memories

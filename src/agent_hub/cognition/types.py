@@ -277,7 +277,7 @@ class CognitiveContextBundle(BaseModel):
     core_constraints: tuple[str, ...] = Field(default_factory=tuple, max_length=1)
     relationship_context: tuple[str, ...] = Field(default_factory=tuple, max_length=3)
     world_context: tuple[str, ...] = Field(default_factory=tuple, max_length=2)
-    experience_context: tuple[str, ...] = Field(default_factory=tuple, max_length=2)
+    experience_context: tuple[str, ...] = Field(default_factory=tuple, max_length=8)
     belief_context: tuple[str, ...] = Field(default_factory=tuple, max_length=3)
     skill_context: tuple[str, ...] = Field(default_factory=tuple, max_length=1)
     reasons: tuple[str, ...] = Field(default_factory=tuple, max_length=8)
