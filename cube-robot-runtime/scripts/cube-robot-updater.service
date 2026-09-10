@@ -1,0 +1,13 @@
+[Unit]
+Description=Cube Robot Runtime OTA Update Check
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=cube-robot
+Group=cube-robot
+EnvironmentFile=-/etc/cube-robot/environment
+ExecStart=/usr/local/lib/cube-robot/ota-update.sh --config /etc/cube-robot/robot.toml
+NoNewPrivileges=true
+PrivateTmp=true

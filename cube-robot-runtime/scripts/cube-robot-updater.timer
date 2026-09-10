@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule Cube Robot Runtime OTA Update Checks
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+Persistent=true
+Unit=cube-robot-updater.service
+
+[Install]
+WantedBy=timers.target

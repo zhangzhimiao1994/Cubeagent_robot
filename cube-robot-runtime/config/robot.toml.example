@@ -1,0 +1,8 @@
+[runtime]
+device_id = "replace-with-device-id"
+server_url = "wss://updates.example.com/robot"
+
+[updates]
+channel = "stable"
+manifest_url = "https://updates.example.com/manifest.json"
+check_interval_minutes = 30

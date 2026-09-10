@@ -1,0 +1,19 @@
+[Unit]
+Description=Cube Robot Runtime
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cube-robot
+Group=cube-robot
+EnvironmentFile=-/etc/cube-robot/environment
+WorkingDirectory=/var/lib/cube-robot/current
+ExecStart=/var/lib/cube-robot/current/bin/cube-robot --config /etc/cube-robot/robot.toml
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
