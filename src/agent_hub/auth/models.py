@@ -31,6 +31,7 @@ PERMISSIONS = MappingProxyType(
                 "memory:*",
                 "hermes:*",
                 "cognition:*",
+                "robot:*",
                 "run:*",
                 "plugin:read",
                 "plugin:use",
@@ -53,6 +54,8 @@ PERMISSIONS = MappingProxyType(
                 "mcp:read",
                 "mcp:use",
                 "cognition:read",
+                "robot:read",
+                "robot:use",
                 "plugin:read",
                 "plugin:use",
             }

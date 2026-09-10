@@ -6,8 +6,10 @@ build-backend = "hatchling.build"
 name = "cube-robot-runtime"
 version = "0.1.0"
 description = "Standalone Raspberry Pi robot runtime"
-requires-python = ">=3.12"
-dependencies = []
+requires-python = ">=3.11"
+dependencies = [
+    "websocket-client>=1.8,<2",
+]
 
 [project.scripts]
 cube-robot = "cube_robot_runtime.main:main"

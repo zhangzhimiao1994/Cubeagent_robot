@@ -64,6 +64,13 @@ def test_runtime_service_entry_point_accepts_run_config(
     assert command[-3:] == ["run", "--config", "/etc/cube-robot/robot.toml"]
 
 
+def test_pi_runtime_supports_python_311() -> None:
+    root = Path("cube-robot-runtime")
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert pyproject["project"]["requires-python"] == ">=3.11"
+
+
 def test_runtime_config_rejects_non_table_with_type_error(tmp_path: Path) -> None:
     config = tmp_path / "robot.toml"
     config.write_text('runtime = "not-a-table"\n', encoding="utf-8")
@@ -102,8 +109,18 @@ def test_ota_dry_run_uses_bootstrap_python_without_current_release() -> None:
     assert "current/bin/python" not in bootstrap_branch
 
 
+def test_updater_timer_uses_dry_run_until_transport_exists() -> None:
+    service = (Path("cube-robot-runtime") / "scripts" / "cube-robot-updater.service").read_text(
+        encoding="utf-8"
+    )
+
+    assert "ota-update.sh --dry-run --config /etc/cube-robot/robot.toml" in service
+
+
 def test_first_boot_template_path_has_stable_override() -> None:
     script = (Path("cube-robot-runtime") / "scripts" / "first-boot-register.sh").read_text(encoding="utf-8")
     assert "RUNTIME_ROOT" in script
+    assert "getent passwd cube-robot" in script
+    assert "useradd" in script
     assert 'TEMPLATE_PATH="${TEMPLATE_PATH:-$RUNTIME_ROOT/config/robot.toml.example}"' in script
     assert 'install -m 0640 -o cube-robot -g cube-robot "$TEMPLATE_PATH" "$CONFIG_PATH"' in script

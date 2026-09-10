@@ -20,6 +20,8 @@ class RuntimeConfig:
     server_url: str
     device_id: str
     session_id: str = "dry-run-session"
+    device_token: str | None = None
+    timeout_seconds: float = 10.0
 
 
 @dataclass(frozen=True)
@@ -30,7 +32,11 @@ class DryRunResult:
 
 def run_dry_run(config: RuntimeConfig, utterance: str) -> DryRunResult:
     identity = DeviceIdentity(device_id=config.device_id)
-    connection = open_connection(config.server_url)
+    connection = open_connection(
+        config.server_url,
+        device_token=config.device_token,
+        timeout_seconds=config.timeout_seconds,
+    )
     recorder = PlaybackRecorder()
     heartbeat = RobotEnvelope.new(
         message_type="device.heartbeat",
@@ -42,15 +48,20 @@ def run_dry_run(config: RuntimeConfig, utterance: str) -> DryRunResult:
         message_type="speech.partial",
         device_id=identity.device_id,
         session_id=config.session_id,
-        payload={"text": utterance},
+        payload={"text": utterance, "is_final": True},
     )
-    connection.send(heartbeat)
-    connection.send(utterance_message)
-    response = connection.receive()
-    text = str(response.payload["text"])
-    recorder.play(text)
+    sent = (heartbeat, utterance_message)
+    try:
+        for envelope in sent:
+            connection.send(envelope)
+        response = connection.receive()
+        text = response.payload.get("text")
+        if isinstance(text, str) and response.type == "assistant.text.done":
+            recorder.play(text)
+    finally:
+        connection.close()
     return DryRunResult(
-        sent_types=tuple(envelope.type for envelope in connection.sent),
+        sent_types=tuple(envelope.type for envelope in sent),
         received_texts=tuple(recorder.texts),
     )
 
@@ -62,11 +73,18 @@ def load_runtime_config(path: Path) -> RuntimeConfig:
         raise TypeError("config must contain a runtime table")
     device_id = runtime.get("device_id")
     server_url = runtime.get("server_url")
+    device_token = runtime.get("device_token")
     if not isinstance(device_id, str) or not device_id:
         raise ValueError("runtime.device_id must be a non-empty string")
     if not isinstance(server_url, str) or not server_url:
         raise ValueError("runtime.server_url must be a non-empty string")
-    return RuntimeConfig(server_url=server_url, device_id=device_id)
+    if device_token is not None and (not isinstance(device_token, str) or not device_token):
+        raise ValueError("runtime.device_token must be a non-empty string when set")
+    return RuntimeConfig(
+        server_url=server_url,
+        device_id=device_id,
+        device_token=device_token if isinstance(device_token, str) else None,
+    )
 
 
 def run_runtime(config: RuntimeConfig, *, once: bool, stop_event: Event) -> int:
@@ -84,7 +102,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     dry_run = subcommands.add_parser("dry-run")
     dry_run.add_argument("--server-url", required=True)
     dry_run.add_argument("--device-id", required=True)
+    dry_run.add_argument("--device-token")
     dry_run.add_argument("--session-id", default="dry-run-session")
+    dry_run.add_argument("--timeout-seconds", type=float, default=10.0)
     dry_run.add_argument("--utterance", required=True)
     run = subcommands.add_parser("run")
     run.add_argument("--config", type=Path, required=True)
@@ -107,7 +127,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             for signum, previous_handler in previous_handlers.items():
                 signal.signal(signum, previous_handler)
     result = run_dry_run(
-        RuntimeConfig(args.server_url, args.device_id, args.session_id),
+        RuntimeConfig(
+            args.server_url,
+            args.device_id,
+            args.session_id,
+            args.device_token,
+            args.timeout_seconds,
+        ),
         args.utterance,
     )
     print(json.dumps({"sent_types": result.sent_types, "received_texts": result.received_texts}, ensure_ascii=False))

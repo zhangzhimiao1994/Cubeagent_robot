@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     attachment_store_dir: Path = Path("/var/lib/agent-hub/attachments")
     generated_artifact_dir: Path = Path("/var/lib/agent-hub/generated-artifacts")
     litellm_health_url: str | None = None
+    robot_device_tokens: SecretStr = SecretStr("")
     bootstrap_tenant_id: UUID = UUID("00000000-0000-4000-8000-000000000001")
     bootstrap_tenant_slug: str = Field(
         default="default", min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9-]*$"
@@ -87,6 +88,11 @@ class Settings(BaseSettings):
         """Return the Redis URL only at the connection boundary."""
 
         return self.redis_url.get_secret_value()
+
+    def robot_device_tokens_value(self) -> str:
+        """Return robot device token config only at the device auth boundary."""
+
+        return self.robot_device_tokens.get_secret_value()
 
     def master_key_bytes(self) -> bytes:
         """Return the configured AES-256 master key decoded from base64."""

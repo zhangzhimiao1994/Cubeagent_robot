@@ -91,6 +91,7 @@ from agent_hub.multimodal.minimax import MiniMaxVideoGenerationClient
 from agent_hub.multimodal.video_providers import TextToVideoProvider, TextToVideoProviderRouter
 from agent_hub.observability.logging import configure_logging
 from agent_hub.observability.metrics import default_metrics_registry
+from agent_hub.robot.auth import RobotDeviceTokenStore
 from agent_hub.robot.session import RobotSessionRegistry
 from agent_hub.routing.classifier import GatewayRouteClassifier
 from agent_hub.routing.service import ModeRouter, RoutingPolicy
@@ -948,6 +949,9 @@ def create_app(
     application.state.robot_session_registry = RobotSessionRegistry(
         responder=robot_responder.respond_text
     )
+    application.state.robot_device_tokens = RobotDeviceTokenStore.from_secret(
+        configured_settings.robot_device_tokens
+    )
 
     async def refresh_channel_runtime_config(runtime_config: Mapping[str, str]) -> None:
         application.state.channel_runtime_config = dict(runtime_config)
@@ -999,6 +1003,7 @@ def create_app(
         create_robot_voice_router(
             registry=application.state.robot_session_registry,
             responder=robot_responder,
+            device_tokens=application.state.robot_device_tokens,
         ).routes
     )
 
