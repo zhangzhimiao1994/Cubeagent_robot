@@ -408,6 +408,32 @@ Hermes remains the confirmed lesson and run-advice system. The cognitive layer s
 
 Hermes injection remains bounded and filtered.
 
+### Cognitive Failure Learning
+
+Cognitive-layer failures must be observable and learnable. The runtime may continue without cognitive advice when the cognitive layer fails, but the failure must not disappear silently.
+
+When cognitive advice, routing, reflection, belief update, relationship update, world-state update, or outcome ingestion fails, the system should create a bounded Hermes failure observation:
+
+- failure stage: `advice`, `router`, `reflection`, `belief_update`, `relationship_update`, `world_state_update`, `skill_learning`, or `outcome_ingest`
+- failure class: timeout, validation error, repository error, model error, unsafe content rejection, or unexpected exception
+- impact: advice skipped, episode stored without reflection, experience not promoted, state update skipped, or outcome ingest skipped
+- safe summary: a short operational lesson without raw user transcript, secrets, tokens, or protected profile details
+- next avoidance strategy: retry later, fall back to Memory-only context, reduce router budget, disable a bad candidate experience, or require review
+
+These Hermes records should be categorized as runtime/cognition observations unless they have been reviewed and confirmed as future behavior guidance. Confirmed cognition lessons may later influence routing, but unconfirmed failure observations should remain diagnostic and should not pollute normal conversation context.
+
+Example Hermes lesson:
+
+```json
+{
+  "category": "scheduler",
+  "outcome": "failure",
+  "lesson": "cognition_failure stage=router impact=advice_skipped strategy=fallback_to_memory_only",
+  "tags": ["cognition", "failure", "router"],
+  "weight": 4
+}
+```
+
 ### Evolution
 
 Evolution remains the mechanism for versioned improvement rounds. The cognitive layer can propose Evolution runs when multiple experiences indicate a stable opportunity:
@@ -509,6 +535,7 @@ The debug UI should be operational and dense, not a marketing interface.
 - Asking too many curiosity questions.
 - Using memory retrieval that makes voice response latency feel slow.
 - Mixing user facts, strategy lessons, relationship state, and world state into one untyped memory bucket.
+- Swallowing cognitive-layer failures without recording a bounded Hermes failure observation.
 
 ## Phasing
 

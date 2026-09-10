@@ -20,6 +20,8 @@
 - Retrieval must be dynamic and bounded.
 - Do not replace Hermes, Memory, Skill, or Evolution.
 - Do not introduce several overlapping third-party memory frameworks.
+- Cognitive-layer failures must create bounded Hermes failure observations; failures may not disappear silently.
+- Unconfirmed cognitive failure observations must remain diagnostic and must not pollute normal conversation context.
 - Ordinary reflection cannot directly rewrite core identity, safety rules, or tool permissions.
 - Protected changes must go through explicit approval, versioning, audit, and rollback.
 - Every cognitive record must preserve tenant and user isolation.
@@ -41,6 +43,7 @@ Create backend cognition package:
 - `src/agent_hub/cognition/router.py`: bounded Memory/Experience context selection.
 - `src/agent_hub/cognition/integrations.py`: Hermes, Evolution, Skill, and Memory integration helpers.
 - `src/agent_hub/cognition/runtime.py`: best-effort runtime advice and outcome ingestion boundary.
+- `src/agent_hub/cognition/failure_learning.py`: bounded Hermes failure observation payloads for cognitive-layer failures.
 - `src/agent_hub/api/routers/cognition.py`: admin API for debugging and operations.
 
 Modify backend:
@@ -60,6 +63,7 @@ Create backend tests:
 - `tests/unit/cognition/test_state.py`
 - `tests/unit/cognition/test_router.py`
 - `tests/unit/cognition/test_integrations.py`
+- `tests/unit/cognition/test_failure_learning.py`
 - `tests/unit/runtime/test_cognitive_context.py`
 - `tests/api/test_cognition_api.py`
 - `tests/integration/cognition/test_cognition_persistence.py`
@@ -1256,11 +1260,14 @@ git commit -m "feat: route cognitive context"
 
 **Files:**
 - Create: `src/agent_hub/cognition/integrations.py`
+- Create: `src/agent_hub/cognition/failure_learning.py`
 - Test: `tests/unit/cognition/test_integrations.py`
+- Test: `tests/unit/cognition/test_failure_learning.py`
 
 **Interfaces:**
 - Consumes: `ExperienceRecord`, `ReflectionRecord`, `BeliefRecord`, `EvolutionRunRequest`, `HermesFeedbackRequest` payload shape.
 - Produces: `hermes_feedback_from_experience(experience: ExperienceRecord) -> dict[str, object]`.
+- Produces: `hermes_failure_observation(stage: str, failure_class: str, impact: str, strategy: str) -> dict[str, object]`.
 - Produces: `evolution_request_from_experiences(experiences: tuple[ExperienceRecord, ...]) -> EvolutionRunRequest | None`.
 - Produces: `memory_candidate_from_belief(belief: BeliefRecord) -> dict[str, object] | None`.
 
@@ -1340,7 +1347,75 @@ Expected: FAIL with `ImportError` for `agent_hub.cognition.integrations`.
 
 Do not include raw transcript or secret-like evidence details.
 
-- [ ] **Step 4: Implement Evolution adapter**
+- [ ] **Step 4: Write failing cognitive failure learning tests**
+
+```python
+from agent_hub.cognition.failure_learning import hermes_failure_observation
+
+
+def test_cognitive_failure_observation_is_bounded_for_hermes() -> None:
+    payload = hermes_failure_observation(
+        stage="router",
+        failure_class="timeout",
+        impact="advice_skipped",
+        strategy="fallback_to_memory_only",
+    )
+
+    assert payload["category"] == "scheduler"
+    assert payload["outcome"] == "failure"
+    assert payload["tags"] == ["cognition", "failure", "router"]
+    assert payload["weight"] == 4
+    assert payload["lesson"] == (
+        "cognition_failure stage=router failure_class=timeout "
+        "impact=advice_skipped strategy=fallback_to_memory_only"
+    )
+```
+
+- [ ] **Step 5: Implement cognitive failure observation adapter**
+
+Create `src/agent_hub/cognition/failure_learning.py`:
+
+```python
+from __future__ import annotations
+
+import re
+
+_SAFE_TOKEN = re.compile(r"^[a-z][a-z0-9_:-]{0,63}$")
+
+
+def hermes_failure_observation(
+    *,
+    stage: str,
+    failure_class: str,
+    impact: str,
+    strategy: str,
+) -> dict[str, object]:
+    safe_stage = _safe_token(stage, fallback="unknown")
+    safe_failure_class = _safe_token(failure_class, fallback="unexpected_exception")
+    safe_impact = _safe_token(impact, fallback="unknown_impact")
+    safe_strategy = _safe_token(strategy, fallback="require_review")
+    return {
+        "category": "scheduler",
+        "outcome": "failure",
+        "lesson": (
+            f"cognition_failure stage={safe_stage} failure_class={safe_failure_class} "
+            f"impact={safe_impact} strategy={safe_strategy}"
+        ),
+        "tags": ["cognition", "failure", safe_stage],
+        "weight": 4,
+    }
+
+
+def _safe_token(value: str, *, fallback: str) -> str:
+    normalized = "_".join(value.strip().casefold().replace("-", "_").split())
+    if _SAFE_TOKEN.fullmatch(normalized) is None:
+        return fallback
+    return normalized
+```
+
+This helper must never accept raw exception messages, raw transcript text, secrets, tokens, or profile details. Callers pass only bounded classification tokens.
+
+- [ ] **Step 6: Implement Evolution adapter**
 
 `evolution_request_from_experiences` returns `None` unless at least one active experience has:
 
@@ -1352,20 +1427,20 @@ Do not include raw transcript or secret-like evidence details.
 
 When eligible, return `EvolutionRunRequest(kind="skill_optimization", title="Cognitive skill improvement", objective=..., approval_policy="ask", iteration_policy="score_gated", memory_policy="summarize_between_rounds", max_rounds=3, min_delta=2.0, rubric=[...])`.
 
-- [ ] **Step 5: Implement Memory adapter**
+- [ ] **Step 7: Implement Memory adapter**
 
 `memory_candidate_from_belief` returns `None` for beliefs below confidence `0.75`, contradicted beliefs, and sensitive scopes. For eligible beliefs, return a bounded dict with `layer="episodic"`, `category="fact"`, `text`, `confidence`, and `metadata={"source": "cognition_belief"}`.
 
-- [ ] **Step 6: Run focused tests**
+- [ ] **Step 8: Run focused tests**
 
-Run: `pytest tests/unit/cognition/test_integrations.py -v`
+Run: `pytest tests/unit/cognition/test_integrations.py tests/unit/cognition/test_failure_learning.py -v`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add src/agent_hub/cognition/integrations.py tests/unit/cognition/test_integrations.py
+git add src/agent_hub/cognition/integrations.py src/agent_hub/cognition/failure_learning.py tests/unit/cognition/test_integrations.py tests/unit/cognition/test_failure_learning.py
 git commit -m "feat: connect cognition to learning systems"
 ```
 
@@ -1383,6 +1458,7 @@ git commit -m "feat: connect cognition to learning systems"
 - Consumes: `MemoryExperienceRouter`, `CognitiveContextBundle`, `render_cognitive_context`, completed run status, routing decision payloads.
 - Produces: `CognitiveAdvisorProtocol.advise(...) -> CognitiveContextBundle`.
 - Produces: `safe_cognitive_context_text(...) -> str`.
+- Produces: bounded Hermes failure observations when cognitive advice or outcome ingestion fails.
 - Modifies: `RunService` to call cognitive advice as best-effort context, with timeout and failure isolation similar to Hermes.
 
 - [ ] **Step 1: Write failing runtime advice tests**
@@ -1438,6 +1514,32 @@ async def test_safe_cognitive_context_formats_bounded_payload() -> None:
 
     assert text.startswith("<COGNITIVE_CONTEXT>")
     assert "Use concise spoken deployment guidance." in text
+
+
+class RecordingHermesFailureSink:
+    def __init__(self):
+        self.payloads = []
+
+    async def record_hermes_feedback(self, payload):
+        self.payloads.append(payload)
+
+
+@pytest.mark.asyncio
+async def test_safe_cognitive_context_records_hermes_failure_observation() -> None:
+    sink = RecordingHermesFailureSink()
+
+    text = await safe_cognitive_context_text(
+        SlowCognitiveAdvisor(),
+        tenant_id=uuid4(),
+        user_id=uuid4(),
+        scene="voice_chat",
+        current_request="debug deployment",
+        timeout_seconds=0.01,
+        hermes_failure_sink=sink,
+    )
+
+    assert text == ""
+    assert sink.payloads[0]["lesson"].startswith("cognition_failure stage=advice")
 ```
 
 - [ ] **Step 2: Run and confirm failure**
@@ -1482,6 +1584,7 @@ async def safe_cognitive_context_text(
     conversation_id: str | None = None,
     run_id: UUID | None = None,
     timeout_seconds: float = 0.8,
+    hermes_failure_sink: object | None = None,
 ) -> str:
     if advisor is None:
         return ""
@@ -1497,10 +1600,16 @@ async def safe_cognitive_context_text(
             ),
             timeout=timeout_seconds,
         )
+    except TimeoutError:
+        await _record_failure(hermes_failure_sink, stage="advice", failure_class="timeout", impact="advice_skipped", strategy="fallback_to_memory_only")
+        return ""
     except Exception:
+        await _record_failure(hermes_failure_sink, stage="advice", failure_class="unexpected_exception", impact="advice_skipped", strategy="fallback_to_memory_only")
         return ""
     return render_cognitive_context(bundle)
 ```
+
+Add `_record_failure` in `runtime.py` using `hermes_failure_observation`. The sink protocol is intentionally small: if the object has `record_hermes_feedback(payload)` await it; if recording fails, swallow that exception too so failure learning never breaks the main run.
 
 - [ ] **Step 4: Wire RunService best-effort advice**
 
@@ -1543,6 +1652,8 @@ class CognitiveOutcomeIngestProtocol(Protocol):
 ```
 
 Modify terminal run completion handling in `RunService` to call the hook best-effort after Hermes outcome recording. It must swallow exceptions and log them, matching Hermes failure isolation.
+
+If outcome ingestion fails, record a Hermes failure observation with `stage="outcome_ingest"`, `failure_class="unexpected_exception"`, `impact="outcome_ingest_skipped"`, and `strategy="retry_later"`.
 
 - [ ] **Step 6: Run focused runtime tests**
 
@@ -1907,6 +2018,7 @@ Spec coverage:
 - Dynamic bounded retrieval is covered by Task 6.
 - Hermes, Memory, Evolution, and Skill integration is covered by Task 7.
 - Runtime influence and non-blocking outcome ingestion are covered by Task 8.
+- Cognitive failure recording into bounded Hermes observations is covered by Tasks 7, 8, and 11.
 - Admin API and Web debug visibility are covered by Tasks 9 and 10.
 - Protected persona, SOUL, safety, permissions, and hardware-control boundaries are covered by Tasks 5, 7, and 11.
 - Tenant/user isolation is covered by Tasks 2, 9, and 11.
