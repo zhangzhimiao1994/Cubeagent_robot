@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cube-robot-runtime"
+version = "0.1.0"
+description = "Standalone Raspberry Pi robot runtime"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["cube_robot_runtime"]

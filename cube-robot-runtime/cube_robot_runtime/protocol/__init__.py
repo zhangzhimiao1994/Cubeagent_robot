@@ -1,0 +1,1 @@
+"""Protocol envelope types."""
