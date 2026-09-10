@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import socket
 import sys
 from datetime import UTC, datetime
 from typing import Any
@@ -141,7 +140,7 @@ def probe_ota_manifest(
     except HTTPError as exc:
         body = exc.read(BODY_LIMIT + 1).decode("utf-8", errors="replace")
         raise ProbeError(f"OTA manifest HTTP {exc.code}: {truncate(body)}") from exc
-    except (TimeoutError, socket.timeout, URLError, OSError) as exc:
+    except (TimeoutError, URLError, OSError) as exc:
         raise ProbeError(f"OTA manifest request failed: {truncate(str(exc))}") from exc
 
 
@@ -172,7 +171,7 @@ def probe_login_path(
             "status": exc.code,
             "body_preview": truncate(body),
         }
-    except (TimeoutError, socket.timeout, URLError, OSError) as exc:
+    except (TimeoutError, URLError, OSError) as exc:
         raise ProbeError(f"login request failed: {truncate(str(exc))}") from exc
 
 
@@ -288,11 +287,11 @@ def open_http(request: Request, *, timeout_seconds: float, no_proxy: bool) -> An
 def websocket_proxy_options(no_proxy: bool) -> dict[str, object]:
     if not no_proxy:
         return {}
-    return dict(
-        http_proxy_host=None,
-        http_proxy_port=None,
-        http_no_proxy=["*"],
-    )
+    return {
+        "http_proxy_host": None,
+        "http_proxy_port": None,
+        "http_no_proxy": ["*"],
+    }
 
 
 def http_base_url(base_url: str) -> str:

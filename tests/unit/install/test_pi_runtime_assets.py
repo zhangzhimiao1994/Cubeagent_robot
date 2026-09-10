@@ -1,3 +1,4 @@
+import importlib.util
 import os
 import shlex
 import subprocess
@@ -58,17 +59,28 @@ def test_robot_voice_probe_asset_documents_required_cli_and_robot_protocol_paths
 
 
 def test_robot_voice_probe_checks_login_path_and_bypasses_proxies_by_default() -> None:
-    text = (Path("tools") / "robot_voice_probe.py").read_text(encoding="utf-8")
+    probe_path = Path("tools") / "robot_voice_probe.py"
+    text = probe_path.read_text(encoding="utf-8")
 
     for required in (
         "/api/v1/auth/login",
         "--no-proxy",
         "default=True",
         "ProxyHandler({})",
-        "http_proxy_host=None",
-        "http_proxy_port=None",
     ):
         assert required in text
+    spec = importlib.util.spec_from_file_location("robot_voice_probe_test", probe_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.websocket_proxy_options(True) == {
+        "http_proxy_host": None,
+        "http_proxy_port": None,
+        "http_no_proxy": ["*"],
+    }
+    assert module.websocket_proxy_options(False) == {}
 
 
 def test_robot_voice_probe_waits_for_final_assistant_websocket_frame() -> None:
