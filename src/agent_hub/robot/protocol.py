@@ -60,13 +60,13 @@ class AudioChunkPayload(BaseModel):
 class RobotEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
-    protocol_version: Literal["1"] = "1"
+    protocol_version: Literal["1"]
     message_id: str = Field(min_length=1, max_length=128)
     session_id: str = Field(min_length=1, max_length=128)
     device_id: str = Field(min_length=1, max_length=128)
     timestamp: datetime
     type: RobotMessageType
-    payload: dict[str, object] = Field(default_factory=dict)
+    payload: dict[str, object]
 
     @field_validator("message_id", "session_id", "device_id")
     @classmethod
@@ -74,6 +74,13 @@ class RobotEnvelope(BaseModel):
         if value != value.strip() or any(ord(character) < 32 or ord(character) == 127 for character in value):
             raise ValueError("identifiers must be unpadded printable text")
         return value
+
+    @field_validator("timestamp")
+    @classmethod
+    def normalize_timestamp(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("timestamp must be timezone-aware")
+        return value.astimezone(UTC)
 
 
 def build_envelope(
@@ -85,6 +92,7 @@ def build_envelope(
     timestamp: datetime | None = None,
 ) -> RobotEnvelope:
     return RobotEnvelope(
+        protocol_version="1",
         message_id=uuid4().hex,
         session_id=session_id,
         device_id=device_id,

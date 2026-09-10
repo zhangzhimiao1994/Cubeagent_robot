@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 _SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 _VERSION_PATTERN = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?$")
+_PROTOCOL_VERSION_PATTERN = re.compile(r"^[1-9]\d*$")
 
 
 class OtaStatus(StrEnum):
@@ -57,6 +58,12 @@ class OtaManifest(BaseModel):
             raise ValueError("OTA versions must use YYYY.MM.DD+BUILD format")
         return value
 
+    @field_validator("min_protocol_version")
+    @classmethod
+    def validate_min_protocol_version(cls, value: str) -> str:
+        _protocol_version_number(value)
+        return value
+
 
 class OtaDecision(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
@@ -72,7 +79,9 @@ def validate_manifest_for_device(
     protocol_version: str,
     current_version: str,
 ) -> OtaDecision:
-    if protocol_version != manifest.min_protocol_version:
+    device_protocol_version = _protocol_version_number(protocol_version)
+    minimum_protocol_version = _protocol_version_number(manifest.min_protocol_version)
+    if device_protocol_version < minimum_protocol_version:
         return OtaDecision(
             status=OtaStatus.INCOMPATIBLE,
             reason="device protocol version is incompatible with the OTA manifest",
@@ -100,3 +109,9 @@ def _version_key(version: str) -> tuple[int, int, int, int]:
         raise ValueError("current_version must use YYYY.MM.DD+BUILD format")
     year, month, day, build = match.groups()
     return int(year), int(month), int(day), int(build or 0)
+
+
+def _protocol_version_number(version: str) -> int:
+    if _PROTOCOL_VERSION_PATTERN.fullmatch(version) is None:
+        raise ValueError("protocol version must be a positive integer string")
+    return int(version)

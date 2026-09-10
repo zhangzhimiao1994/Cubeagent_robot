@@ -1,0 +1,150 @@
+{
+  "audio_chunk_payload": {
+    "additionalProperties": false,
+    "properties": {
+      "chunk_b64": {
+        "minLength": 1,
+        "title": "Chunk B64",
+        "type": "string"
+      },
+      "codec": {
+        "enum": [
+          "pcm16",
+          "opus"
+        ],
+        "title": "Codec",
+        "type": "string"
+      },
+      "sample_rate_hz": {
+        "maximum": 48000,
+        "minimum": 8000,
+        "title": "Sample Rate Hz",
+        "type": "integer"
+      },
+      "sequence": {
+        "minimum": 1,
+        "title": "Sequence",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "codec",
+      "sample_rate_hz",
+      "sequence",
+      "chunk_b64"
+    ],
+    "title": "AudioChunkPayload",
+    "type": "object"
+  },
+  "envelope": {
+    "$defs": {
+      "RobotMessageType": {
+        "enum": [
+          "device.register",
+          "device.heartbeat",
+          "device.status",
+          "audio.start",
+          "audio.chunk",
+          "audio.end",
+          "speech.partial",
+          "interaction.event",
+          "playback.started",
+          "playback.finished",
+          "playback.interrupted",
+          "screen.event",
+          "button.event",
+          "session.accepted",
+          "assistant.text.delta",
+          "assistant.text.done",
+          "tts.audio.chunk",
+          "tts.audio.done",
+          "avatar.state",
+          "screen.show",
+          "device.command",
+          "playback.stop",
+          "conversation.end",
+          "error"
+        ],
+        "title": "RobotMessageType",
+        "type": "string"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "device_id": {
+        "maxLength": 128,
+        "minLength": 1,
+        "title": "Device Id",
+        "type": "string"
+      },
+      "message_id": {
+        "maxLength": 128,
+        "minLength": 1,
+        "title": "Message Id",
+        "type": "string"
+      },
+      "payload": {
+        "additionalProperties": true,
+        "title": "Payload",
+        "type": "object"
+      },
+      "protocol_version": {
+        "const": "1",
+        "title": "Protocol Version",
+        "type": "string"
+      },
+      "session_id": {
+        "maxLength": 128,
+        "minLength": 1,
+        "title": "Session Id",
+        "type": "string"
+      },
+      "timestamp": {
+        "format": "date-time",
+        "title": "Timestamp",
+        "type": "string"
+      },
+      "type": {
+        "$ref": "#/$defs/RobotMessageType"
+      }
+    },
+    "required": [
+      "protocol_version",
+      "message_id",
+      "session_id",
+      "device_id",
+      "timestamp",
+      "type",
+      "payload"
+    ],
+    "title": "RobotEnvelope",
+    "type": "object"
+  },
+  "message_types": [
+    "device.register",
+    "device.heartbeat",
+    "device.status",
+    "audio.start",
+    "audio.chunk",
+    "audio.end",
+    "speech.partial",
+    "interaction.event",
+    "playback.started",
+    "playback.finished",
+    "playback.interrupted",
+    "screen.event",
+    "button.event",
+    "session.accepted",
+    "assistant.text.delta",
+    "assistant.text.done",
+    "tts.audio.chunk",
+    "tts.audio.done",
+    "avatar.state",
+    "screen.show",
+    "device.command",
+    "playback.stop",
+    "conversation.end",
+    "error"
+  ],
+  "protocol_version": "1"
+}
