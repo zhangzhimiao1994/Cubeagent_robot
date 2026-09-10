@@ -30,7 +30,7 @@ from agent_hub.api.errors import (
     public_error_handler,
 )
 from agent_hub.api.middleware import RequestBodyLimitMiddleware, SafeExceptionMiddleware
-from agent_hub.api.routers import admin, auth, config, runs, system, users
+from agent_hub.api.routers import admin, auth, cognition, config, runs, system, users
 from agent_hub.auth.passwords import PasswordService
 from agent_hub.auth.rate_limit import RedisAuthRateLimiter
 from agent_hub.auth.service import AuthService
@@ -708,6 +708,7 @@ def create_app(
                 active_database = database_factory(configured.database_url_value())
                 cleanup_callbacks.append(("database", active_database.dispose))
                 active_sessions = active_database.session_factory
+            application.state.session_factory = active_sessions
 
             needs_redis = (
                 rate_limiter is None
@@ -927,6 +928,7 @@ def create_app(
     application.state.config_service = config_service
     application.state.admin_resource_service = admin_resource_service
     application.state.user_admin_service = user_admin_service
+    application.state.session_factory = session_factory
     application.state.bootstrap_tenant_id = configured_settings.bootstrap_tenant_id
     application.state.run_service = run_service
     application.state.runtime_registry = active_runtime_registry
@@ -970,6 +972,7 @@ def create_app(
     application.router.routes.extend(auth.router.routes)
     application.router.routes.extend(config.router.routes)
     application.router.routes.extend(runs.router.routes)
+    application.router.routes.extend(cognition.router.routes)
     application.router.routes.extend(admin.router.routes)
     application.router.routes.extend(users.router.routes)
     application.router.routes.extend(
