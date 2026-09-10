@@ -1,10 +1,11 @@
 """Validate OTA metadata and plan release switches without mutating disk state."""
 
 import argparse
-from dataclasses import dataclass
 import hashlib
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -26,7 +27,7 @@ class UpdateManifest:
     def from_dict(cls, data: Mapping[str, Any]) -> "UpdateManifest":
         artifact_data = data.get("artifact")
         if not isinstance(artifact_data, Mapping):
-            raise ValueError("manifest artifact must be an object")
+            raise TypeError("manifest artifact must be an object")
         return cls(
             version=_required_string(data, "version"),
             channel=_required_string(data, "channel"),

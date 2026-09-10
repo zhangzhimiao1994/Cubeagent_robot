@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from cube_robot_runtime.ota.updater import UpdateManifest, select_release, verify_artifact
 
 
@@ -27,6 +28,19 @@ def test_manifest_rejects_protocol_too_new() -> None:
     )
 
     assert manifest.compatible_with(protocol_version="1") is False
+
+
+def test_manifest_rejects_non_object_artifact_with_type_error() -> None:
+    with pytest.raises(TypeError, match="manifest artifact must be an object"):
+        UpdateManifest.from_dict(
+            {
+                "version": "2026.09.10+001",
+                "channel": "stable",
+                "min_protocol_version": "1",
+                "artifact": [],
+                "signature": "sig-test",
+            }
+        )
 
 
 def test_select_release_preserves_previous_for_rollback(tmp_path: Path) -> None:

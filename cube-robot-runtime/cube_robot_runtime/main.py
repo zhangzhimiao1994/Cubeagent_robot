@@ -1,13 +1,13 @@
 """Dry-run command for the standalone device runtime."""
 
 import argparse
-from dataclasses import dataclass
 import json
-from pathlib import Path
 import signal
-from threading import Event
 import tomllib
-from typing import Sequence
+from collections.abc import Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from threading import Event
 
 from cube_robot_runtime.audio.playback import PlaybackRecorder
 from cube_robot_runtime.device.identity import DeviceIdentity
@@ -59,7 +59,7 @@ def load_runtime_config(path: Path) -> RuntimeConfig:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     runtime = data.get("runtime")
     if not isinstance(runtime, dict):
-        raise ValueError("config must contain a runtime table")
+        raise TypeError("config must contain a runtime table")
     device_id = runtime.get("device_id")
     server_url = runtime.get("server_url")
     if not isinstance(device_id, str) or not device_id:

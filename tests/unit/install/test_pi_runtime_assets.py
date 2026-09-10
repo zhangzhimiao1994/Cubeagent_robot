@@ -1,13 +1,12 @@
 import os
-from pathlib import Path
 import shlex
 import subprocess
 import sys
 import tomllib
+from pathlib import Path
 
 import pytest
-
-from cube_robot_runtime.main import main
+from cube_robot_runtime.main import load_runtime_config, main
 
 
 def test_pi_runtime_assets_are_isolated() -> None:
@@ -60,6 +59,14 @@ def test_runtime_service_entry_point_accepts_run_config(tmp_path: Path, capsys) 
     exec_start = next(line for line in service.splitlines() if line.startswith("ExecStart="))
     command = shlex.split(exec_start.removeprefix("ExecStart="))
     assert command[-3:] == ["run", "--config", "/etc/cube-robot/robot.toml"]
+
+
+def test_runtime_config_rejects_non_table_with_type_error(tmp_path: Path) -> None:
+    config = tmp_path / "robot.toml"
+    config.write_text('runtime = "not-a-table"\n', encoding="utf-8")
+
+    with pytest.raises(TypeError, match="config must contain a runtime table"):
+        load_runtime_config(config)
 
 
 def test_runtime_service_command_stays_running_without_once(tmp_path: Path) -> None:
