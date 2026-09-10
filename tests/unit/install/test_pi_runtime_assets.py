@@ -42,7 +42,10 @@ def test_pi_provisioning_assets_keep_runtime_state_outside_releases() -> None:
         assert "/var/lib/cube-robot" in text
 
 
-def test_runtime_service_entry_point_accepts_run_config(tmp_path: Path, capsys) -> None:
+def test_runtime_service_entry_point_accepts_run_config(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     root = Path("cube-robot-runtime")
     pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     assert pyproject["project"]["scripts"]["cube-robot"] == "cube_robot_runtime.main:main"

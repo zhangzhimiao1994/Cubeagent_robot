@@ -1,3 +1,4 @@
+import pytest
 from cube_robot_runtime.main import RuntimeConfig, main, run_dry_run
 
 
@@ -27,7 +28,7 @@ def test_dry_run_accepts_websocket_target_without_opening_a_connection() -> None
     assert result.received_texts == ("我听到了：你好",)
 
 
-def test_dry_run_cli_prints_mock_response(capsys) -> None:
+def test_dry_run_cli_prints_mock_response(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = main(
         [
             "dry-run",
