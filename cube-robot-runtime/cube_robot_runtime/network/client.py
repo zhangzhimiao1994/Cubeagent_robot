@@ -1,6 +1,7 @@
 """Mock connection for deterministic device dry runs."""
 
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 from cube_robot_runtime.protocol.messages import RobotEnvelope
 
@@ -23,6 +24,6 @@ class MockConnection:
 
 
 def open_connection(server_url: str) -> MockConnection:
-    if server_url != "mock://robot":
-        raise ValueError("dry run requires mock://robot")
+    if urlparse(server_url).scheme not in {"mock", "ws", "wss"}:
+        raise ValueError("dry run requires a mock or WebSocket URL")
     return MockConnection()
