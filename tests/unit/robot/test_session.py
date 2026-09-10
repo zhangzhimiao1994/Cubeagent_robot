@@ -41,3 +41,27 @@ def test_registry_turns_final_speech_partial_into_assistant_text_done() -> None:
         RobotMessageType.CONVERSATION_END,
     ]
     assert "你好" in str(response[0].payload["text"])
+
+
+def test_registry_does_not_complete_turn_for_non_boolean_final_marker() -> None:
+    registry = RobotSessionRegistry()
+    registry.record(
+        build_envelope(
+            message_type=RobotMessageType.AUDIO_START,
+            device_id="pi-lab-01",
+            session_id="voice-session-1",
+            payload={},
+        )
+    )
+
+    response = registry.record(
+        build_envelope(
+            message_type=RobotMessageType.SPEECH_PARTIAL,
+            device_id="pi-lab-01",
+            session_id="voice-session-1",
+            payload={"text": "你好", "is_final": "false"},
+        )
+    )
+
+    assert response == ()
+    assert registry.status("pi-lab-01").devices[0].state is RobotSessionState.LISTENING

@@ -68,8 +68,9 @@ class RobotSessionRegistry:
             else (current.latency_ms if current is not None else None),
         )
 
-        if envelope.type is not RobotMessageType.SPEECH_PARTIAL or not envelope.payload.get(
-            "is_final"
+        if (
+            envelope.type is not RobotMessageType.SPEECH_PARTIAL
+            or envelope.payload.get("is_final") is not True
         ):
             return ()
 
@@ -116,7 +117,10 @@ def _default_response(utterance: str, *, device_id: str, session_id: str) -> str
 def _state_after(envelope: RobotEnvelope, current: RobotSessionState) -> RobotSessionState:
     if envelope.type is RobotMessageType.AUDIO_START:
         return RobotSessionState.LISTENING
-    if envelope.type is RobotMessageType.SPEECH_PARTIAL and envelope.payload.get("is_final"):
+    if (
+        envelope.type is RobotMessageType.SPEECH_PARTIAL
+        and envelope.payload.get("is_final") is True
+    ):
         return RobotSessionState.THINKING
     if envelope.type is RobotMessageType.CONVERSATION_END:
         return RobotSessionState.IDLE
