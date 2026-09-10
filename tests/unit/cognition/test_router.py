@@ -113,6 +113,49 @@ async def test_router_scores_filters_and_renders_experience_context() -> None:
 
 
 @pytest.mark.asyncio
+async def test_router_scores_chinese_term_overlap_for_relevance() -> None:
+    tenant_id = uuid4()
+    user_id = uuid4()
+    repo = InMemoryCognitionRepository(tenant_id=tenant_id, user_id=user_id)
+    evidence = EvidenceRef(kind="episode", ref_id="ep-zh", summary="中文语音机器人纠正")
+    now = datetime(2026, 9, 10, 9, 0, tzinfo=UTC)
+    unrelated = ExperienceRecord(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        kind=ExperienceKind.STRATEGY,
+        statement="Prefer dashboard summarization before writing reports.",
+        applicability="report workflow",
+        confidence=0.99,
+        evidence_refs=(evidence,),
+        status=CognitiveRecordStatus.ACTIVE,
+        updated_at=now,
+    )
+    relevant = ExperienceRecord(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        kind=ExperienceKind.STRATEGY,
+        statement="语音机器人部署经验：先确认服务健康状态。",
+        applicability="部署调试 语音机器人",
+        recommended_action="先给出一个可执行的中文排查步骤。",
+        confidence=0.5,
+        evidence_refs=(evidence,),
+        status=CognitiveRecordStatus.ACTIVE,
+        updated_at=now - timedelta(minutes=10),
+    )
+    await repo.upsert("experience", str(unrelated.id), unrelated.model_dump(mode="json"))
+    await repo.upsert("experience", str(relevant.id), relevant.model_dump(mode="json"))
+
+    bundle = await MemoryExperienceRouter(repo).build_context_bundle(
+        scene="task_execution",
+        current_request="语音机器人 部署调试",
+        limit=1,
+    )
+
+    assert len(bundle.experience_context) == 1
+    assert "语音机器人部署经验" in bundle.experience_context[0]
+
+
+@pytest.mark.asyncio
 async def test_router_builds_bounded_bundle_from_cognitive_records() -> None:
     tenant_id = uuid4()
     user_id = uuid4()

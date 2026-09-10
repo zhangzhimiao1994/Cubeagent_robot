@@ -278,7 +278,7 @@ def _reasons(scene: str, current_request: str, experience_limit: int) -> list[st
 
 
 def _terms(text: str) -> set[str]:
-    return {term for term in re.findall(r"[A-Za-z0-9_]+", text.casefold()) if len(term) > 1}
+    return set(re.findall(r"[a-z0-9\u4e00-\u9fff]+", text.casefold()))
 
 
 def _model_payload(payload: dict[str, object]) -> dict[str, object]:
