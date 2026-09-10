@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict
 
 from agent_hub.cognition.gates import LearningGateDecision, learning_gate_decision
+from agent_hub.cognition.reflection import ReflectionEngine
 from agent_hub.cognition.repository import CognitionRepository
 from agent_hub.cognition.types import (
     CognitiveEpisode,
@@ -42,6 +43,10 @@ class ExperienceStore:
 
         experience = self._candidate_experience_from_episode(episode, decision)
         await self._save_experience(experience)
+        reflection = ReflectionEngine().reflect(episode, experience)
+        await self._repository.upsert(
+            "reflection", str(reflection.id), reflection.model_dump(mode="json")
+        )
         return EpisodeIngestResult(
             episode_stored=True,
             experience_created=True,

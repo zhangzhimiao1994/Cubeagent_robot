@@ -80,6 +80,59 @@ async def test_record_episode_creates_candidate_experience_for_correction() -> N
 
 
 @pytest.mark.asyncio
+async def test_record_episode_persists_reflection_when_experience_is_created() -> None:
+    tenant_id, user_id, repository = _repository()
+    store = ExperienceStore(repository)
+    evidence = EvidenceRef(kind="conversation", ref_id="conv-correction", summary="user correction")
+    episode = CognitiveEpisode(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        source=CognitiveSource.VOICE,
+        conversation_id="conv-correction",
+        started_at=datetime(2026, 9, 10, 10, 5, tzinfo=UTC),
+        summary="User corrected the assistant for giving long spoken deployment instructions.",
+        signals=(EpisodeSignal.USER_CORRECTED,),
+        evidence_refs=(evidence,),
+    )
+
+    result = await store.record_episode(episode)
+    reflections = await repository.list("reflection")
+
+    assert result.experience_created is True
+    assert result.experience is not None
+    assert len(reflections) == 1
+    reflection = reflections[0]
+    assert reflection["record_type"] == "reflection"
+    assert reflection["episode_id"] == str(episode.id)
+    assert reflection["reflection_type"] == "negative"
+    assert reflection["trigger"] == "user_corrected"
+    assert reflection["what_happened"] == episode.summary
+    assert reflection["candidate_experience_ids"] == [str(result.experience.id)]
+    assert reflection["confidence"] == 0.72
+    assert reflection["requires_approval"] is False
+    assert reflection["evidence_refs"] == [evidence.model_dump(mode="json")]
+
+
+@pytest.mark.asyncio
+async def test_record_episode_does_not_persist_reflection_for_rejected_episode() -> None:
+    tenant_id, user_id, repository = _repository()
+    store = ExperienceStore(repository)
+    episode = CognitiveEpisode(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        source=CognitiveSource.WEB,
+        started_at=datetime(2026, 9, 10, 10, 0, tzinfo=UTC),
+        summary="User said hello once.",
+        evidence_refs=(EvidenceRef(kind="conversation", ref_id="conv-low", summary="one greeting"),),
+    )
+
+    result = await store.record_episode(episode)
+
+    assert result.experience_created is False
+    assert await repository.list("reflection") == ()
+
+
+@pytest.mark.asyncio
 async def test_record_episode_always_persists_episode_before_gate_result() -> None:
     tenant_id, user_id, repository = _repository()
     store = ExperienceStore(repository)
