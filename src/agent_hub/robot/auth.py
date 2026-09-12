@@ -37,4 +37,9 @@ class RobotDeviceTokenStore:
         expected = self._tokens_by_device.get(device_id)
         if expected is None or token is None:
             return False
-        return secrets.compare_digest(expected, token)
+        try:
+            expected_bytes = expected.encode("ascii")
+            token_bytes = token.encode("ascii")
+        except UnicodeEncodeError:
+            return False
+        return secrets.compare_digest(expected_bytes, token_bytes)
