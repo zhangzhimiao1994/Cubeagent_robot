@@ -166,3 +166,57 @@ async def test_minimax_uploads_voice_file_and_starts_clone_job() -> None:
     }
     assert result["voice_id"] == "robot-clone"
     assert result["preview_audio_url"] == "https://example.test/demo.mp3"
+
+
+@pytest.mark.asyncio
+async def test_minimax_upload_accepts_top_level_file_id() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "file_id": "file-top-level",
+                "base_resp": {"status_code": 0, "status_msg": "success"},
+            },
+        )
+
+    client = MiniMaxSpeechClient(
+        MiniMaxSpeechConfig(api_key="secret"),
+        client=httpx.AsyncClient(
+            base_url="https://api.minimax.io",
+            transport=httpx.MockTransport(handler),
+        ),
+    )
+
+    file_id = await client.upload_voice_file(
+        b"voice-bytes",
+        filename="sample.wav",
+        content_type="audio/wav",
+        purpose="voice_clone",
+    )
+
+    assert file_id == "file-top-level"
+
+
+@pytest.mark.asyncio
+async def test_minimax_upload_reports_api_error_message() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"base_resp": {"status_code": 1004, "status_msg": "invalid api key"}},
+        )
+
+    client = MiniMaxSpeechClient(
+        MiniMaxSpeechConfig(api_key="secret"),
+        client=httpx.AsyncClient(
+            base_url="https://api.minimax.io",
+            transport=httpx.MockTransport(handler),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="invalid api key"):
+        await client.upload_voice_file(
+            b"voice-bytes",
+            filename="sample.wav",
+            content_type="audio/wav",
+            purpose="voice_clone",
+        )

@@ -154,11 +154,20 @@ class MiniMaxSpeechClient:
             raise ConnectionError("MiniMax file upload unavailable") from error
         response.raise_for_status()
         payload = response.json()
+        base_resp = payload.get("base_resp") if isinstance(payload, dict) else None
+        if isinstance(base_resp, dict) and base_resp.get("status_code") not in (None, 0):
+            status_msg = base_resp.get("status_msg")
+            detail = f": {status_msg}" if isinstance(status_msg, str) and status_msg else ""
+            raise RuntimeError(f"MiniMax file upload returned an error{detail}")
         file_id = _nested_scalar_string(payload, "file", "file_id") or _nested_scalar_string(
             payload, "data", "file_id"
-        )
+        ) or _scalar_string(payload, "file_id")
         if file_id is None:
-            raise RuntimeError("MiniMax file upload response did not include file_id")
+            payload_keys = sorted(payload) if isinstance(payload, dict) else []
+            suffix = f"; response keys: {payload_keys}" if payload_keys else ""
+            raise RuntimeError(
+                f"MiniMax file upload response did not include file_id{suffix}"
+            )
         return file_id
 
     async def clone_voice(
@@ -238,6 +247,17 @@ def _nested_scalar_string(data: object, key: str, child_key: str) -> str | None:
     if not isinstance(child, dict):
         return None
     value = child.get(child_key)
+    if isinstance(value, str) and value:
+        return value
+    if isinstance(value, int):
+        return str(value)
+    return None
+
+
+def _scalar_string(data: object, key: str) -> str | None:
+    if not isinstance(data, dict):
+        return None
+    value = data.get(key)
     if isinstance(value, str) and value:
         return value
     if isinstance(value, int):
