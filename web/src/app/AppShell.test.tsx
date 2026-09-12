@@ -194,6 +194,17 @@ describe("AppShell presentation", () => {
     expect(screen.getByLabelText("工具二级导航")).not.toBeNull();
   });
 
+  it("keeps voice models inside the resources module drawer", async () => {
+    render(<TestApp initialPath="/models" />);
+
+    expect(await screen.findByRole("heading", { name: "魔方 agent" })).not.toBeNull();
+    const navigation = screen.getByRole("navigation", { name: "Main navigation" });
+    expect(within(navigation).getAllByRole("link")).toHaveLength(6);
+    const drawer = screen.getByLabelText("资源二级导航");
+    expect(within(drawer).getByRole("link", { name: /模型与 API/ }).getAttribute("href")).toBe("/models");
+    expect(within(drawer).getByRole("link", { name: /语音模型/ }).getAttribute("href")).toBe("/voice-models");
+  });
+
   it("does not expose fixed navigation controls", async () => {
     render(<TestApp initialPath="/models" />);
 

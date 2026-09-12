@@ -24,6 +24,7 @@ import { SchedulesPage } from "../pages/SchedulesPage";
 import { SetupPage } from "../pages/SetupPage";
 import { SkillsPage } from "../pages/SkillsPage";
 import { UsersPage } from "../pages/UsersPage";
+import { VoiceModelsPage } from "../pages/VoiceModelsPage";
 import { WorkflowsPage } from "../pages/WorkflowsPage";
 import { MODULE_GROUPS } from "./navigation";
 
@@ -56,6 +57,7 @@ export function AppRoutes() {
         <Route path="config" element={<ConfigPage />} />
         <Route path="main-agent" element={<MainAgentPage />} />
         <Route path="models" element={<ModelsPage />} />
+        <Route path="voice-models" element={<VoiceModelsPage />} />
         <Route path="openclaw" element={<OpenClawPage />} />
         <Route path="multimedia" element={<Navigate to="/models" replace />} />
         <Route path="attachments" element={<AttachmentsPage />} />

@@ -309,7 +309,7 @@ describe("ConfigPage", () => {
     expect(screen.getByText("版本 3")).not.toBeNull();
     expect(screen.queryByText("Vibe Coding")).toBeNull();
     expect(screen.queryByTestId("vibe-coding-toggle")).toBeNull();
-    expect(view.container.querySelectorAll(".settings-shortcut-card")).toHaveLength(6);
+    expect(view.container.querySelectorAll(".settings-shortcut-card")).toHaveLength(7);
 
     await user.selectOptions(screen.getByLabelText("默认运行模式"), "dispatch");
     await user.selectOptions(screen.getByLabelText("默认工作流"), "short-video-dispatch");
@@ -353,54 +353,14 @@ describe("ConfigPage", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("JSON 解析失败");
   });
 
-  it("configures MiniMax robot voice, voice presets, and clone defaults", async () => {
-    const user = userEvent.setup();
+  it("keeps robot voice model configuration in the dedicated page", async () => {
     render(<TestApp initialPath="/config" />);
 
     expect(await screen.findByRole("heading", { name: "系统设置" })).not.toBeNull();
-    expect(screen.getByRole("group", { name: "机器人语音" })).not.toBeNull();
-
-    await user.click(screen.getByLabelText("启用服务端 ASR/TTS"));
-    await user.selectOptions(screen.getByLabelText("语音供应商"), "minimax");
-    await user.type(screen.getByLabelText("MiniMax API Key"), "minimax-live-key");
-    await user.selectOptions(screen.getByLabelText("TTS 模型"), "speech-2.8-hd");
-    await user.type(screen.getByLabelText("默认音色 voice_id"), "robot-warm-voice");
-    await user.type(screen.getByLabelText("音色名称"), "温和陪伴音色");
-    await user.click(screen.getByRole("button", { name: "加入音色列表" }));
-    await user.click(screen.getByLabelText("允许控制台发起声音克隆"));
-    fireEvent.change(screen.getByLabelText("克隆试听文本"), {
-      target: { value: "你好，我会用更自然的声音陪你聊天。" },
-    });
-    fireEvent.change(screen.getByLabelText("克隆提示文本"), {
-      target: { value: "保持自然、温和、清晰。" },
-    });
-    await user.click(screen.getByRole("button", { name: "保存系统设置" }));
-
-    const request = requests.find((item) => item.path === "/api/v1/admin/settings" && item.method === "PUT");
-    expect(request?.body).toMatchObject({
-      robot_voice: {
-        enabled: true,
-        media_provider: "minimax",
-        minimax_api_key: "minimax-live-key",
-        minimax_tts_model: "speech-2.8-hd",
-        minimax_tts_voice_id: "robot-warm-voice",
-        default_voice_id: "robot-warm-voice",
-        clone_enabled: true,
-        clone_model: "speech-2.8-hd",
-        clone_preview_text: "你好，我会用更自然的声音陪你聊天。",
-        clone_prompt_text: "保持自然、温和、清晰。",
-        voices: [
-          {
-            id: "robot-warm-voice",
-            name: "温和陪伴音色",
-            provider: "minimax",
-            voice_id: "robot-warm-voice",
-            enabled: true,
-            cloned: false,
-          },
-        ],
-      },
-    });
+    expect(screen.queryByRole("group", { name: "机器人语音" })).toBeNull();
+    expect(screen.getByRole("region", { name: "机器人语音配置入口" })).not.toBeNull();
+    expect(screen.getByRole("link", { name: "打开语音模型配置" }).getAttribute("href")).toBe("/voice-models");
+    expect(screen.queryByLabelText("MiniMax API Key")).toBeNull();
   });
 
   it("keeps OpenClaw management in the dedicated control page", async () => {

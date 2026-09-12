@@ -131,6 +131,17 @@ export const MODULE_GROUPS: ModuleGroup[] = [
           { to: "/models?section=presets", label: "预设供应商", permission: "config:read" },
         ],
       },
+      {
+        to: "/voice-models",
+        label: "语音模型",
+        description: "配置语音机器人服务端 ASR/TTS、MiniMax 音色、声音克隆和默认播报音色。",
+        permission: "config:read",
+        children: [
+          { to: "/voice-models?section=settings", label: "MiniMax ASR/TTS", permission: "config:read" },
+          { to: "/voice-models?section=voices", label: "音色库", permission: "config:read" },
+          { to: "/voice-models?section=clones", label: "声音克隆", permission: "config:read" },
+        ],
+      },
 
       {
         to: "/memory",

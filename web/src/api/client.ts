@@ -249,6 +249,27 @@ const RobotVoicePresetSchema = z.object({
   updated_at: z.string().nullable().optional(),
 });
 
+export type RobotVoicePreset = z.infer<typeof RobotVoicePresetSchema>;
+
+const RobotVoiceCloneJobSchema = z.object({
+  id: z.string(),
+  status: z.enum(["succeeded", "failed"]),
+  provider: z.literal("minimax").default("minimax"),
+  voice_id: z.string(),
+  voice_name: z.string(),
+  source_filename: z.string(),
+  source_size_bytes: z.number(),
+  source_content_type: z.string(),
+  prompt_filename: z.string().nullable().optional(),
+  provider_file_id: z.string().nullable().optional(),
+  provider_prompt_file_id: z.string().nullable().optional(),
+  preview_audio_url: z.string().nullable().optional(),
+  error: z.string().nullable().optional(),
+  created_at: z.string(),
+});
+
+export type RobotVoiceCloneJob = z.infer<typeof RobotVoiceCloneJobSchema>;
+
 const RobotVoiceSettingsSchema = z.object({
   configured: z.boolean().default(false),
   enabled: z.boolean().default(false),
@@ -273,6 +294,7 @@ const RobotVoiceSettingsSchema = z.object({
   clone_model: z.string().default("speech-2.8-hd"),
   clone_preview_text: z.string().default("你好，我是你的语音机器人。"),
   clone_prompt_text: z.string().nullable().default(null),
+  clone_jobs: z.array(RobotVoiceCloneJobSchema).default([]),
 });
 
 const DEFAULT_ROBOT_VOICE_SETTINGS: z.infer<typeof RobotVoiceSettingsSchema> = {
@@ -298,6 +320,7 @@ const DEFAULT_ROBOT_VOICE_SETTINGS: z.infer<typeof RobotVoiceSettingsSchema> = {
   clone_model: "speech-2.8-hd",
   clone_preview_text: "你好，我是你的语音机器人。",
   clone_prompt_text: null,
+  clone_jobs: [],
 };
 
 const SystemSettingsSchema = z.object({
@@ -326,6 +349,15 @@ const SystemSettingsSchema = z.object({
 });
 
 export type SystemSettings = z.infer<typeof SystemSettingsSchema>;
+export type RobotVoiceSettings = z.infer<typeof RobotVoiceSettingsSchema>;
+
+export type RobotVoiceCloneUpload = {
+  voice_id: string;
+  voice_name: string;
+  authorization_confirmed: boolean;
+  source_audio: File;
+  prompt_audio?: File | null;
+};
 
 const OpenClawOperationRequestSchema = z.object({
   platform: z.enum(["linux", "windows", "macos"]),
@@ -1247,6 +1279,40 @@ async function request<T>(
   return parsed.data;
 }
 
+async function requestForm<T>(
+  path: string,
+  formData: FormData,
+  schema: z.ZodType<T>,
+): Promise<T> {
+  let response: Response;
+  const token = currentAccessToken();
+  try {
+    response = await fetch(path, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: formData,
+    });
+  } catch {
+    throw new ApiError("network request failed", 0, "network_error");
+  }
+  if (!response.ok) {
+    throw await errorFromResponse(response);
+  }
+  const payload = await response.json();
+  const parsed = schema.safeParse(payload);
+  if (!parsed.success) {
+    throw new ApiError(
+      `response schema validation failed for ${path}`,
+      response.status,
+      "invalid_response",
+    );
+  }
+  return parsed.data;
+}
+
 async function requestNoContent(path: string, init: RequestInit): Promise<void> {
   let response: Response;
   const token = currentAccessToken();
@@ -1502,6 +1568,54 @@ export const api = {
       "/api/v1/admin/settings",
       { method: "PUT", body: JSON.stringify(payload) },
       SystemSettingsSchema,
+    );
+  },
+  robotVoiceSettings(): Promise<RobotVoiceSettings> {
+    return request(
+      "/api/v1/admin/robot/voice-settings",
+      { method: "GET" },
+      RobotVoiceSettingsSchema,
+    );
+  },
+  updateRobotVoiceSettings(payload: RobotVoiceSettings): Promise<RobotVoiceSettings> {
+    return request(
+      "/api/v1/admin/robot/voice-settings",
+      { method: "PUT", body: JSON.stringify(payload) },
+      RobotVoiceSettingsSchema,
+    );
+  },
+  createRobotVoicePreset(payload: RobotVoicePreset): Promise<RobotVoiceSettings> {
+    return request(
+      "/api/v1/admin/robot/voices",
+      { method: "POST", body: JSON.stringify(payload) },
+      RobotVoiceSettingsSchema,
+    );
+  },
+  deleteRobotVoicePreset(id: string): Promise<RobotVoiceSettings> {
+    return request(
+      `/api/v1/admin/robot/voices/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+      RobotVoiceSettingsSchema,
+    );
+  },
+  robotVoiceCloneJobs(): Promise<RobotVoiceCloneJob[]> {
+    return request(
+      "/api/v1/admin/robot/voice-clones",
+      { method: "GET" },
+      z.array(RobotVoiceCloneJobSchema),
+    );
+  },
+  createRobotVoiceClone(payload: RobotVoiceCloneUpload): Promise<RobotVoiceCloneJob> {
+    const formData = new FormData();
+    formData.set("voice_id", payload.voice_id);
+    formData.set("voice_name", payload.voice_name);
+    formData.set("authorization_confirmed", String(payload.authorization_confirmed));
+    formData.set("source_audio", payload.source_audio);
+    if (payload.prompt_audio) formData.set("prompt_audio", payload.prompt_audio);
+    return requestForm(
+      "/api/v1/admin/robot/voice-clones",
+      formData,
+      RobotVoiceCloneJobSchema,
     );
   },
   createOpenClawOperationFromRun(runId: string): Promise<OpenClawOperation> {

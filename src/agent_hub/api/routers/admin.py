@@ -19,8 +19,9 @@ from typing import Annotated, Any, Protocol, TypedDict, cast
 from urllib.parse import unquote, urlsplit, urlunsplit
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
+import httpx
 import yaml
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
 from sqlalchemy import delete, func, select
@@ -90,6 +91,7 @@ from agent_hub.scheduler.types import (
 from agent_hub.security.secrets import SecretService, SecretValidationError
 from agent_hub.skills.package import InvalidSkillPackage
 from agent_hub.skills.scanner import SkillScanner, SkillScanReport
+from agent_hub.voice.minimax import MiniMaxSpeechClient, MiniMaxSpeechConfig
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"], responses=BASE_ERROR_RESPONSES)
 _LOGGER = logging.getLogger(__name__)
@@ -107,6 +109,8 @@ _OPENAI_COMPATIBLE_AUTH_HINT = (
     "OpenAI 兼容中转站返回 401/403 通常表示鉴权失败：请确认 API Key 属于该中转站账号，"
     "API Base 是否需要带 /v1，并且 API Key 输入框只填写 token 原文，不要带 Bearer 前缀。"
 )
+_ROBOT_VOICE_ID_PATTERN = r"^[A-Za-z](?:[A-Za-z0-9_-]{6,126}[A-Za-z0-9])$"
+_MAX_ROBOT_VOICE_CLONE_AUDIO_BYTES = 20 * 1024 * 1024
 
 
 class ModelDeploymentRequest(BaseModel):
@@ -733,6 +737,25 @@ class RobotVoicePreset(BaseModel):
     updated_at: datetime | None = None
 
 
+class RobotVoiceCloneJob(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=128)
+    status: str = Field(pattern=r"^(succeeded|failed)$")
+    provider: str = Field(default="minimax", pattern=r"^(minimax)$")
+    voice_id: str = Field(min_length=1, max_length=128)
+    voice_name: str = Field(min_length=1, max_length=128)
+    source_filename: str = Field(min_length=1, max_length=255)
+    source_size_bytes: int = Field(ge=1)
+    source_content_type: str = Field(min_length=1, max_length=128)
+    prompt_filename: str | None = Field(default=None, max_length=255)
+    provider_file_id: str | None = Field(default=None, max_length=256)
+    provider_prompt_file_id: str | None = Field(default=None, max_length=256)
+    preview_audio_url: str | None = Field(default=None, max_length=2048)
+    error: str | None = Field(default=None, max_length=2_000)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class RobotVoiceSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -763,6 +786,7 @@ class RobotVoiceSettings(BaseModel):
         max_length=500,
     )
     clone_prompt_text: str | None = Field(default=None, max_length=500)
+    clone_jobs: list[RobotVoiceCloneJob] = Field(default_factory=list, max_length=128)
 
     @field_validator("minimax_api_base_url")
     @classmethod
@@ -8006,6 +8030,315 @@ async def update_settings(
         if inspect.isawaitable(result):
             await result
     return saved
+
+
+async def _save_robot_voice_settings(
+    voice: RobotVoiceSettings,
+    *,
+    request: Request,
+    service: AdminResourceService,
+) -> RobotVoiceSettings:
+    current = await service.get_settings()
+    payload = current.model_dump()
+    payload["robot_voice"] = voice
+    saved = await service.update_settings(SystemSettingsRequest.model_validate(payload))
+    refresh = getattr(request.app.state, "refresh_robot_voice_media_config", None)
+    if callable(refresh):
+        result = refresh(saved)
+        if inspect.isawaitable(result):
+            await result
+    return saved.robot_voice
+
+
+@router.get(
+    "/robot/voice-settings",
+    response_model=RobotVoiceSettings,
+    responses=error_responses(401, 403, 422),
+)
+async def get_robot_voice_settings(
+    principal: Annotated[AuthenticatedPrincipal, Depends(current_principal)],
+    service: Annotated[AdminResourceService, Depends(_service)],
+) -> RobotVoiceSettings:
+    _require(principal, "config:read")
+    return (await service.get_settings()).robot_voice
+
+
+@router.put(
+    "/robot/voice-settings",
+    response_model=RobotVoiceSettings,
+    responses=error_responses(401, 403, 422),
+)
+async def update_robot_voice_settings(
+    body: RobotVoiceSettings,
+    request: Request,
+    principal: Annotated[AuthenticatedPrincipal, Depends(current_principal)],
+    service: Annotated[AdminResourceService, Depends(_service)],
+) -> RobotVoiceSettings:
+    _require(principal, "config:write")
+    return await _save_robot_voice_settings(body, request=request, service=service)
+
+
+@router.post(
+    "/robot/voices",
+    response_model=RobotVoiceSettings,
+    status_code=201,
+    responses=error_responses(401, 403, 422),
+)
+async def create_robot_voice_preset(
+    body: RobotVoicePreset,
+    request: Request,
+    principal: Annotated[AuthenticatedPrincipal, Depends(current_principal)],
+    service: Annotated[AdminResourceService, Depends(_service)],
+) -> RobotVoiceSettings:
+    _require(principal, "config:write")
+    current = (await service.get_settings()).robot_voice
+    voices = [voice for voice in current.voices if voice.id != body.id]
+    voices.append(body)
+    default_voice_id = current.default_voice_id or body.voice_id
+    next_settings = current.model_copy(
+        update={
+            "configured": True,
+            "voices": voices,
+            "default_voice_id": default_voice_id,
+            "minimax_tts_voice_id": current.minimax_tts_voice_id or default_voice_id,
+        }
+    )
+    return await _save_robot_voice_settings(next_settings, request=request, service=service)
+
+
+@router.delete(
+    "/robot/voices/{voice_id}",
+    response_model=RobotVoiceSettings,
+    responses=error_responses(401, 403, 404, 422),
+)
+async def delete_robot_voice_preset(
+    voice_id: str,
+    request: Request,
+    principal: Annotated[AuthenticatedPrincipal, Depends(current_principal)],
+    service: Annotated[AdminResourceService, Depends(_service)],
+) -> RobotVoiceSettings:
+    _require(principal, "config:write")
+    current = (await service.get_settings()).robot_voice
+    remaining = [voice for voice in current.voices if voice.id != voice_id]
+    if len(remaining) == len(current.voices):
+        raise PublicAPIError(404, "not_found", "voice preset was not found")
+    deleted = next(voice for voice in current.voices if voice.id == voice_id)
+    default_voice_id = current.default_voice_id
+    if default_voice_id in {deleted.id, deleted.voice_id}:
+        default_voice_id = remaining[0].voice_id if remaining else None
+    next_settings = current.model_copy(
+        update={
+            "voices": remaining,
+            "default_voice_id": default_voice_id,
+            "minimax_tts_voice_id": default_voice_id,
+        }
+    )
+    return await _save_robot_voice_settings(next_settings, request=request, service=service)
+
+
+@router.get(
+    "/robot/voice-clones",
+    response_model=list[RobotVoiceCloneJob],
+    responses=error_responses(401, 403, 422),
+)
+async def list_robot_voice_clone_jobs(
+    principal: Annotated[AuthenticatedPrincipal, Depends(current_principal)],
+    service: Annotated[AdminResourceService, Depends(_service)],
+) -> list[RobotVoiceCloneJob]:
+    _require(principal, "config:read")
+    return list((await service.get_settings()).robot_voice.clone_jobs)
+
+
+@router.post(
+    "/robot/voice-clones",
+    response_model=RobotVoiceCloneJob,
+    status_code=201,
+    responses=error_responses(401, 403, 409, 422, 503),
+)
+async def create_robot_voice_clone(
+    request: Request,
+    principal: Annotated[AuthenticatedPrincipal, Depends(current_principal)],
+    service: Annotated[AdminResourceService, Depends(_service)],
+    voice_id: Annotated[str, Form(min_length=8, max_length=128, pattern=_ROBOT_VOICE_ID_PATTERN)],
+    voice_name: Annotated[str, Form(min_length=1, max_length=128)],
+    authorization_confirmed: Annotated[bool, Form()],
+    source_audio: Annotated[UploadFile, File()],
+    prompt_audio: Annotated[UploadFile | None, File()] = None,
+) -> RobotVoiceCloneJob:
+    _require(principal, "config:write")
+    if not authorization_confirmed:
+        raise PublicAPIError(
+            422,
+            "voice_clone_authorization_required",
+            "voice cloning requires explicit authorization confirmation",
+        )
+    current = (await service.get_settings()).robot_voice
+    if not current.clone_enabled:
+        raise PublicAPIError(409, "voice_clone_disabled", "voice cloning is disabled")
+    source_bytes = await _read_robot_voice_clone_upload(
+        source_audio, label="source", allow_empty=False
+    )
+    filename = source_audio.filename or "voice-sample.wav"
+    content_type = source_audio.content_type or "application/octet-stream"
+    prompt_bytes: bytes | None = None
+    prompt_filename = None
+    if prompt_audio is not None:
+        prompt_bytes = await _read_robot_voice_clone_upload(
+            prompt_audio, label="prompt", allow_empty=True
+        )
+        if prompt_bytes:
+            prompt_filename = prompt_audio.filename or "prompt-audio.wav"
+            if not current.clone_prompt_text:
+                raise PublicAPIError(
+                    422,
+                    "request_validation",
+                    "prompt audio requires clone prompt text",
+                )
+    close_client = False
+    clone_client = getattr(request.app.state, "robot_voice_clone_client", None)
+    if clone_client is None:
+        clone_client = await _minimax_clone_client_from_settings(current, service)
+        close_client = True
+    try:
+        provider_file_id = await clone_client.upload_voice_file(
+            source_bytes,
+            filename=filename,
+            content_type=content_type,
+            purpose="voice_clone",
+        )
+        prompt_file_id = None
+        if prompt_audio is not None and prompt_bytes:
+            prompt_file_id = await clone_client.upload_voice_file(
+                prompt_bytes,
+                filename=prompt_filename or "prompt-audio.wav",
+                content_type=prompt_audio.content_type or "application/octet-stream",
+                purpose="prompt_audio",
+            )
+        clone_result = await clone_client.clone_voice(
+            voice_id=voice_id,
+            source_file_id=provider_file_id,
+            model=current.clone_model,
+            preview_text=current.clone_preview_text,
+            prompt_text=current.clone_prompt_text,
+            prompt_file_id=prompt_file_id,
+        )
+    except (ConnectionError, KeyError, RuntimeError, ValueError, httpx.HTTPError) as error:
+        job = RobotVoiceCloneJob(
+            id=str(uuid4()),
+            status="failed",
+            voice_id=voice_id,
+            voice_name=voice_name,
+            source_filename=filename,
+            source_size_bytes=len(source_bytes),
+            source_content_type=content_type,
+            error=_safe_model_check_detail(str(error)),
+        )
+        await _append_robot_voice_clone_job(current, job, request=request, service=service)
+        raise PublicAPIError(
+            503,
+            "voice_clone_failed",
+            "voice cloning provider request failed",
+            details={"job_id": job.id, "reason": job.error or "unknown"},
+        ) from None
+    finally:
+        closer = getattr(clone_client, "aclose", None)
+        if close_client and callable(closer):
+            result = closer()
+            if inspect.isawaitable(result):
+                await result
+    job = RobotVoiceCloneJob(
+        id=str(uuid4()),
+        status="succeeded",
+        voice_id=str(clone_result.get("voice_id") or voice_id),
+        voice_name=voice_name,
+        source_filename=filename,
+        source_size_bytes=len(source_bytes),
+        source_content_type=content_type,
+        prompt_filename=prompt_filename,
+        provider_file_id=provider_file_id,
+        provider_prompt_file_id=prompt_file_id,
+        preview_audio_url=str(clone_result.get("preview_audio_url") or "") or None,
+    )
+    preset = RobotVoicePreset(
+        id=job.voice_id,
+        name=voice_name,
+        provider="minimax",
+        voice_id=job.voice_id,
+        description="MiniMax Voice Clone 生成音色",
+        enabled=True,
+        cloned=True,
+    )
+    voices = [voice for voice in current.voices if voice.id != preset.id]
+    voices.append(preset)
+    await _save_robot_voice_settings(
+        current.model_copy(
+            update={
+                "configured": True,
+                "voices": voices,
+                "default_voice_id": job.voice_id,
+                "minimax_tts_voice_id": job.voice_id,
+                "clone_jobs": [job, *current.clone_jobs][:128],
+            }
+        ),
+        request=request,
+        service=service,
+    )
+    return job
+
+
+async def _append_robot_voice_clone_job(
+    current: RobotVoiceSettings,
+    job: RobotVoiceCloneJob,
+    *,
+    request: Request,
+    service: AdminResourceService,
+) -> None:
+    await _save_robot_voice_settings(
+        current.model_copy(update={"clone_jobs": [job, *current.clone_jobs][:128]}),
+        request=request,
+        service=service,
+    )
+
+
+async def _read_robot_voice_clone_upload(
+    upload: UploadFile,
+    *,
+    label: str,
+    allow_empty: bool,
+) -> bytes:
+    body = await upload.read(_MAX_ROBOT_VOICE_CLONE_AUDIO_BYTES + 1)
+    if len(body) > _MAX_ROBOT_VOICE_CLONE_AUDIO_BYTES:
+        raise PublicAPIError(422, "request_validation", f"{label} audio is too large")
+    if not body and not allow_empty:
+        raise PublicAPIError(422, "request_validation", f"{label} audio is empty")
+    return body
+
+
+async def _minimax_clone_client_from_settings(
+    current: RobotVoiceSettings, service: AdminResourceService
+) -> MiniMaxSpeechClient:
+    if current.media_provider != "minimax":
+        raise PublicAPIError(409, "voice_provider_disabled", "MiniMax voice provider is not enabled")
+    resolver = getattr(service, "resolve_secret_value", None)
+    if not callable(resolver) or not current.minimax_credential_ref:
+        raise PublicAPIError(409, "voice_provider_not_configured", "MiniMax API key is not configured")
+    api_key = await resolver(current.minimax_credential_ref)
+    return MiniMaxSpeechClient(
+        MiniMaxSpeechConfig(
+            api_key=api_key,
+            base_url=current.minimax_api_base_url,
+            asr_model=current.minimax_asr_model,
+            tts_model=current.minimax_tts_model,
+            default_voice_id=current.default_voice_id or current.minimax_tts_voice_id,
+            audio_format=current.minimax_tts_audio_format,
+            sample_rate_hz=current.minimax_tts_sample_rate_hz,
+            bitrate=current.minimax_tts_bitrate,
+            language_boost=current.minimax_tts_language_boost,
+            speed=current.minimax_tts_speed,
+            volume=current.minimax_tts_volume,
+            pitch=current.minimax_tts_pitch,
+        )
+    )
 
 
 @router.post(

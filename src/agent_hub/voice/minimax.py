@@ -120,21 +120,90 @@ class MiniMaxSpeechClient:
         if audio_hex is None:
             raise RuntimeError("MiniMax text-to-speech response did not include audio")
         extra_info = data.get("extra_info") if isinstance(data, dict) else None
-        sample_rate = (
-            extra_info.get("audio_sample_rate")
-            if isinstance(extra_info, dict) and isinstance(extra_info.get("audio_sample_rate"), int)
-            else self._config.sample_rate_hz
-        )
-        audio_codec = (
-            extra_info.get("audio_format")
-            if isinstance(extra_info, dict) and isinstance(extra_info.get("audio_format"), str)
-            else audio_format
-        )
+        sample_rate = self._config.sample_rate_hz
+        audio_codec = audio_format
+        if isinstance(extra_info, dict):
+            sample_rate_value = extra_info.get("audio_sample_rate")
+            audio_format_value = extra_info.get("audio_format")
+            if isinstance(sample_rate_value, int):
+                sample_rate = sample_rate_value
+            if isinstance(audio_format_value, str):
+                audio_codec = audio_format_value
         return SynthesizedAudio(
             codec=audio_codec,
             data=bytes.fromhex(audio_hex),
             sample_rate_hz=sample_rate,
         )
+
+    async def upload_voice_file(
+        self,
+        audio: bytes,
+        *,
+        filename: str,
+        content_type: str,
+        purpose: str,
+    ) -> str:
+        try:
+            response = await self._http().post(
+                "/v1/files/upload",
+                headers=self._headers(),
+                data={"purpose": purpose},
+                files={"file": (filename, audio, content_type)},
+            )
+        except httpx.RequestError as error:
+            raise ConnectionError("MiniMax file upload unavailable") from error
+        response.raise_for_status()
+        payload = response.json()
+        file_id = _nested_scalar_string(payload, "file", "file_id") or _nested_scalar_string(
+            payload, "data", "file_id"
+        )
+        if file_id is None:
+            raise RuntimeError("MiniMax file upload response did not include file_id")
+        return file_id
+
+    async def clone_voice(
+        self,
+        *,
+        voice_id: str,
+        source_file_id: str,
+        model: str,
+        preview_text: str,
+        prompt_text: str | None,
+        prompt_file_id: str | None = None,
+    ) -> dict[str, str]:
+        payload: dict[str, Any] = {
+            "file_id": _file_id_payload(source_file_id),
+            "voice_id": voice_id,
+            "model": model,
+            "text": preview_text,
+        }
+        if prompt_file_id and prompt_text:
+            payload["clone_prompt"] = {
+                "prompt_audio": _file_id_payload(prompt_file_id),
+                "prompt_text": prompt_text,
+            }
+        elif prompt_text:
+            payload["text_validation"] = prompt_text
+        try:
+            response = await self._http().post(
+                "/v1/voice_clone",
+                headers=self._headers(),
+                json=payload,
+            )
+        except httpx.RequestError as error:
+            raise ConnectionError("MiniMax voice clone unavailable") from error
+        response.raise_for_status()
+        data = response.json()
+        base_resp = data.get("base_resp") if isinstance(data, dict) else None
+        if isinstance(base_resp, dict) and base_resp.get("status_code") not in (None, 0):
+            raise RuntimeError("MiniMax voice clone returned an error")
+        return {
+            "voice_id": _nested_string(data, "data", "voice_id") or voice_id,
+            "preview_audio_url": _nested_string(data, "data", "preview_audio")
+            or _nested_string(data, "data", "preview_audio_url")
+            or (data.get("demo_audio") if isinstance(data, dict) and isinstance(data.get("demo_audio"), str) else "")
+            or "",
+        }
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -160,6 +229,24 @@ def _nested_string(data: object, key: str, child_key: str) -> str | None:
         return None
     value = child.get(child_key)
     return value if isinstance(value, str) and value else None
+
+
+def _nested_scalar_string(data: object, key: str, child_key: str) -> str | None:
+    if not isinstance(data, dict):
+        return None
+    child = data.get(key)
+    if not isinstance(child, dict):
+        return None
+    value = child.get(child_key)
+    if isinstance(value, str) and value:
+        return value
+    if isinstance(value, int):
+        return str(value)
+    return None
+
+
+def _file_id_payload(file_id: str) -> int | str:
+    return int(file_id) if file_id.isdecimal() else file_id
 
 
 def _extension_for(codec: str) -> str:
