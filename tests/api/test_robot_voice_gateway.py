@@ -1,6 +1,7 @@
 from uuid import UUID
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from starlette.websockets import WebSocketDisconnect
@@ -8,10 +9,12 @@ from starlette.websockets import WebSocketDisconnect
 from agent_hub.app import create_app
 from agent_hub.auth.models import AuthenticatedPrincipal, InvalidCredentials, Role
 from agent_hub.domain.runs import RunStatus, TaskMode
+from agent_hub.robot.auth import RobotDeviceTokenStore
 from agent_hub.robot.protocol import RobotMessageType, build_envelope
 from agent_hub.runs.service import SubmittedRun
 from agent_hub.settings import Settings
 from agent_hub.voice.companion import RobotRunBridge
+from agent_hub.voice.gateway import create_robot_voice_router
 
 ROBOT_RUN_ID = UUID("00000000-0000-4000-8000-000000000301")
 ROBOT_TENANT_ID = UUID("00000000-0000-4000-8000-000000000201")
@@ -140,6 +143,36 @@ class FailingRobotRunService:
         raise RuntimeError("run service unavailable")
 
 
+class FakeVoiceMediaService:
+    def __init__(self) -> None:
+        self.received_types: list[RobotMessageType] = []
+
+    async def handle(self, envelope):
+        self.received_types.append(envelope.type)
+        if envelope.type is not RobotMessageType.AUDIO_END:
+            return ()
+        return (
+            build_envelope(
+                message_type=RobotMessageType.ASSISTANT_TEXT_DONE,
+                device_id=envelope.device_id,
+                session_id=envelope.session_id,
+                payload={"text": "服务端回答"},
+            ),
+            build_envelope(
+                message_type=RobotMessageType.TTS_AUDIO_CHUNK,
+                device_id=envelope.device_id,
+                session_id=envelope.session_id,
+                payload={"codec": "mp3", "sequence": 1, "chunk_b64": "bXAz"},
+            ),
+            build_envelope(
+                message_type=RobotMessageType.TTS_AUDIO_DONE,
+                device_id=envelope.device_id,
+                session_id=envelope.session_id,
+                payload={"codec": "mp3", "total_chunks": 1},
+            ),
+        )
+
+
 class FakeRobotRunRepository:
     def __init__(self, artifacts: tuple[dict[str, object], ...]) -> None:
         self._artifacts = artifacts
@@ -225,6 +258,53 @@ def test_robot_websocket_accepts_heartbeat_and_final_utterance() -> None:
 
     assert message["type"] == "assistant.text.done"
     assert "测试语音" in message["payload"]["text"]
+
+
+def test_robot_websocket_routes_audio_turn_through_media_service() -> None:
+    media_service = FakeVoiceMediaService()
+    app = FastAPI()
+    app.include_router(
+        create_robot_voice_router(
+            device_tokens=RobotDeviceTokenStore.from_secret(
+                SecretStr("pi-lab-01:robot-token")
+            ),
+            media_service=media_service,
+        )
+    )
+    client = TestClient(app)
+
+    with client.websocket_connect("/api/v1/robot/ws/pi-lab-01", headers=_device_headers()) as ws:
+        for message_type, payload in (
+            (
+                RobotMessageType.AUDIO_START,
+                {"codec": "wav", "sample_rate_hz": 16000, "channels": 1},
+            ),
+            (
+                RobotMessageType.AUDIO_CHUNK,
+                {"codec": "wav", "sample_rate_hz": 16000, "sequence": 1, "chunk_b64": "QUJD"},
+            ),
+            (RobotMessageType.AUDIO_END, {"total_chunks": 1}),
+        ):
+            ws.send_json(
+                build_envelope(
+                    message_type=message_type,
+                    device_id="pi-lab-01",
+                    session_id="voice-session-1",
+                    payload=payload,
+                ).model_dump(mode="json")
+            )
+        responses = [ws.receive_json(), ws.receive_json(), ws.receive_json()]
+
+    assert media_service.received_types == [
+        RobotMessageType.AUDIO_START,
+        RobotMessageType.AUDIO_CHUNK,
+        RobotMessageType.AUDIO_END,
+    ]
+    assert [response["type"] for response in responses] == [
+        "assistant.text.done",
+        "tts.audio.chunk",
+        "tts.audio.done",
+    ]
 
 
 def test_robot_websocket_bridges_final_speech_to_agent_run_artifact() -> None:

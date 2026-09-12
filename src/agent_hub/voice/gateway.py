@@ -13,6 +13,7 @@ from agent_hub.robot.ota import OtaArtifact, OtaDecision, OtaManifest, validate_
 from agent_hub.robot.protocol import RobotEnvelope, RobotMessageType, build_envelope
 from agent_hub.robot.session import RobotSessionRegistry, RobotStatusSnapshot
 from agent_hub.voice.companion import CompanionResponder
+from agent_hub.voice.media import VoiceMediaService
 
 
 class MockUtteranceRequest(BaseModel):
@@ -55,11 +56,13 @@ def create_robot_voice_router(
     responder: CompanionResponder | None = None,
     device_tokens: RobotDeviceTokenStore | None = None,
     ota_manifest: OtaManifest | None = None,
+    media_service: VoiceMediaService | None = None,
 ) -> APIRouter:
     active_responder = responder or CompanionResponder()
     active_registry = registry or RobotSessionRegistry(responder=active_responder.respond_text)
     active_device_tokens = device_tokens or RobotDeviceTokenStore.from_secret(None)
     active_ota_manifest = ota_manifest or _default_ota_manifest()
+    active_media_service = media_service
     router = APIRouter(prefix="/api/v1/robot", tags=["robot"], responses=BASE_ERROR_RESPONSES)
 
     @router.get(
@@ -139,7 +142,15 @@ def create_robot_voice_router(
                 if envelope.device_id != device_id:
                     await websocket.close(code=1008)
                     return
-                for response in await active_registry.record_async(envelope):
+                if active_media_service is not None and envelope.type in {
+                    RobotMessageType.AUDIO_START,
+                    RobotMessageType.AUDIO_CHUNK,
+                    RobotMessageType.AUDIO_END,
+                }:
+                    responses = await active_media_service.handle(envelope)
+                else:
+                    responses = await active_registry.record_async(envelope)
+                for response in responses:
                     await websocket.send_json(response.model_dump(mode="json"))
         except WebSocketDisconnect:
             return
