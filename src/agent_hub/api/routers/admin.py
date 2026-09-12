@@ -719,6 +719,65 @@ class OpenClawRemoteAdapterSettings(BaseModel):
         return urlunsplit((parsed.scheme, parsed.netloc, normalized_path, "", ""))
 
 
+class RobotVoicePreset(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$")
+    name: str = Field(min_length=1, max_length=128)
+    provider: str = Field(default="minimax", pattern=r"^(minimax)$")
+    voice_id: str = Field(min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=1_000)
+    enabled: bool = True
+    cloned: bool = False
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class RobotVoiceSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    configured: bool = False
+    enabled: bool = False
+    media_provider: str = Field(default="disabled", pattern=r"^(disabled|minimax)$")
+    minimax_credential_ref: str | None = Field(default=None, max_length=128)
+    minimax_api_key: SecretStr | None = Field(default=None, exclude=True)
+    minimax_api_key_configured: bool = False
+    minimax_api_base_url: str = Field(default="https://api.minimax.io", max_length=2048)
+    minimax_asr_model: str = Field(default="asr-1.0", min_length=1, max_length=128)
+    minimax_tts_model: str = Field(default="speech-2.8-turbo", min_length=1, max_length=128)
+    minimax_tts_voice_id: str | None = Field(default=None, max_length=128)
+    minimax_tts_audio_format: str = Field(default="mp3", pattern=r"^(mp3|wav|flac|pcm|opus)$")
+    minimax_tts_sample_rate_hz: int = Field(default=32000, ge=8000, le=48000)
+    minimax_tts_bitrate: int = Field(default=128000, ge=16000, le=320000)
+    minimax_tts_language_boost: str = Field(default="auto", max_length=64)
+    minimax_tts_speed: float = Field(default=1.0, ge=0.5, le=2.0)
+    minimax_tts_volume: float = Field(default=1.0, ge=0.1, le=10.0)
+    minimax_tts_pitch: int = Field(default=0, ge=-12, le=12)
+    default_voice_id: str | None = Field(default=None, max_length=128)
+    voices: list[RobotVoicePreset] = Field(default_factory=list, max_length=64)
+    clone_enabled: bool = False
+    clone_model: str = Field(default="speech-2.8-hd", min_length=1, max_length=128)
+    clone_preview_text: str = Field(
+        default="你好，我是你的语音机器人。",
+        min_length=1,
+        max_length=500,
+    )
+    clone_prompt_text: str | None = Field(default=None, max_length=500)
+
+    @field_validator("minimax_api_base_url")
+    @classmethod
+    def validate_minimax_api_base_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("MiniMax API base URL must be an HTTP(S) URL")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError(
+                "MiniMax API base URL must not contain credentials, query, or fragment"
+            )
+        normalized_path = parsed.path.rstrip("/")
+        return urlunsplit((parsed.scheme, parsed.netloc, normalized_path, "", ""))
+
+
 class SystemSettingsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -749,6 +808,7 @@ class SystemSettingsRequest(BaseModel):
     channel_entry: str = Field(default="web", max_length=64)
     attachment_retention_days: int = Field(default=7, ge=1, le=365)
     attachment_max_mb: int = Field(default=25, ge=1, le=200)
+    robot_voice: RobotVoiceSettings = Field(default_factory=RobotVoiceSettings)
 
     @field_validator("openclaw_allowed_commands")
     @classmethod
@@ -762,6 +822,58 @@ class SystemSettingsRequest(BaseModel):
 
 class SystemSettingsResponse(SystemSettingsRequest):
     pass
+
+
+async def _system_settings_response_from_request(
+    request: SystemSettingsRequest,
+    *,
+    previous: SystemSettingsResponse | None,
+    create_secret: Callable[[SecretCreateRequest], Awaitable[SecretReferenceResponse]],
+) -> SystemSettingsResponse:
+    response = SystemSettingsResponse(**request.model_dump())
+    robot_voice = await _robot_voice_settings_from_request(
+        request.robot_voice,
+        previous=previous.robot_voice if previous is not None else None,
+        create_secret=create_secret,
+    )
+    return response.model_copy(update={"robot_voice": robot_voice})
+
+
+async def _robot_voice_settings_from_request(
+    request: RobotVoiceSettings,
+    *,
+    previous: RobotVoiceSettings | None,
+    create_secret: Callable[[SecretCreateRequest], Awaitable[SecretReferenceResponse]],
+) -> RobotVoiceSettings:
+    voice = RobotVoiceSettings(**request.model_dump())
+    previous_ref = previous.minimax_credential_ref if previous is not None else None
+    api_key = request.minimax_api_key.get_secret_value().strip() if request.minimax_api_key else ""
+    if api_key:
+        reference = await create_secret(
+            SecretCreateRequest(label="MiniMax robot voice API key", value=SecretStr(api_key))
+        )
+        voice = voice.model_copy(update={"minimax_credential_ref": reference.ref})
+    elif voice.minimax_credential_ref is None and previous_ref is not None:
+        voice = voice.model_copy(update={"minimax_credential_ref": previous_ref})
+    configured = (
+        request.configured
+        or request.enabled
+        or request.media_provider != "disabled"
+        or bool(api_key)
+        or bool(voice.minimax_credential_ref)
+        or bool(request.default_voice_id)
+        or bool(request.minimax_tts_voice_id)
+        or bool(request.voices)
+        or request.clone_enabled
+        or request.clone_preview_text != RobotVoiceSettings().clone_preview_text
+        or bool(request.clone_prompt_text)
+    )
+    return voice.model_copy(
+        update={
+            "configured": configured,
+            "minimax_api_key_configured": bool(voice.minimax_credential_ref),
+        }
+    )
 
 
 class OpenClawOperationRequest(BaseModel):
@@ -2946,7 +3058,11 @@ class InMemoryAdminResourceService:
         return self.settings
 
     async def update_settings(self, request: SystemSettingsRequest) -> SystemSettingsResponse:
-        response = SystemSettingsResponse(**request.model_dump())
+        response = await _system_settings_response_from_request(
+            request,
+            previous=self.settings,
+            create_secret=self.create_secret,
+        )
         self.settings = response
         return response
 
@@ -4422,7 +4538,12 @@ class PersistentAdminResourceService(InMemoryAdminResourceService):
         return SystemSettingsResponse.model_validate(payload)
 
     async def update_settings(self, request: SystemSettingsRequest) -> SystemSettingsResponse:
-        response = SystemSettingsResponse(**request.model_dump())
+        previous = await self.get_settings()
+        response = await _system_settings_response_from_request(
+            request,
+            previous=previous,
+            create_secret=self.create_secret,
+        )
         if not await self._upsert_admin_payload(
             "setting", "system", response.model_dump(mode="json")
         ):
@@ -7873,11 +7994,18 @@ async def get_settings(
 )
 async def update_settings(
     body: SystemSettingsRequest,
+    request: Request,
     principal: Annotated[AuthenticatedPrincipal, Depends(current_principal)],
     service: Annotated[AdminResourceService, Depends(_service)],
 ) -> SystemSettingsResponse:
     _require(principal, "config:write")
-    return await service.update_settings(body)
+    saved = await service.update_settings(body)
+    refresh = getattr(request.app.state, "refresh_robot_voice_media_config", None)
+    if callable(refresh):
+        result = refresh(saved)
+        if inspect.isawaitable(result):
+            await result
+    return saved
 
 
 @router.post(

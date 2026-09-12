@@ -237,6 +237,69 @@ const OpenClawRemoteAdapterConfigSchema = z.object({
   credential_ref: z.string(),
 });
 
+const RobotVoicePresetSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  provider: z.literal("minimax").default("minimax"),
+  voice_id: z.string(),
+  description: z.string().nullable().optional(),
+  enabled: z.boolean().default(true),
+  cloned: z.boolean().default(false),
+  created_at: z.string().nullable().optional(),
+  updated_at: z.string().nullable().optional(),
+});
+
+const RobotVoiceSettingsSchema = z.object({
+  configured: z.boolean().default(false),
+  enabled: z.boolean().default(false),
+  media_provider: z.enum(["disabled", "minimax"]).default("disabled"),
+  minimax_credential_ref: z.string().nullable().default(null),
+  minimax_api_key: z.string().optional(),
+  minimax_api_key_configured: z.boolean().default(false),
+  minimax_api_base_url: z.string().default("https://api.minimax.io"),
+  minimax_asr_model: z.string().default("asr-1.0"),
+  minimax_tts_model: z.string().default("speech-2.8-turbo"),
+  minimax_tts_voice_id: z.string().nullable().default(null),
+  minimax_tts_audio_format: z.enum(["mp3", "wav", "flac", "pcm", "opus"]).default("mp3"),
+  minimax_tts_sample_rate_hz: z.number().default(32000),
+  minimax_tts_bitrate: z.number().default(128000),
+  minimax_tts_language_boost: z.string().default("auto"),
+  minimax_tts_speed: z.number().default(1),
+  minimax_tts_volume: z.number().default(1),
+  minimax_tts_pitch: z.number().default(0),
+  default_voice_id: z.string().nullable().default(null),
+  voices: z.array(RobotVoicePresetSchema).default([]),
+  clone_enabled: z.boolean().default(false),
+  clone_model: z.string().default("speech-2.8-hd"),
+  clone_preview_text: z.string().default("你好，我是你的语音机器人。"),
+  clone_prompt_text: z.string().nullable().default(null),
+});
+
+const DEFAULT_ROBOT_VOICE_SETTINGS: z.infer<typeof RobotVoiceSettingsSchema> = {
+  configured: false,
+  enabled: false,
+  media_provider: "disabled",
+  minimax_credential_ref: null,
+  minimax_api_key_configured: false,
+  minimax_api_base_url: "https://api.minimax.io",
+  minimax_asr_model: "asr-1.0",
+  minimax_tts_model: "speech-2.8-turbo",
+  minimax_tts_voice_id: null,
+  minimax_tts_audio_format: "mp3",
+  minimax_tts_sample_rate_hz: 32000,
+  minimax_tts_bitrate: 128000,
+  minimax_tts_language_boost: "auto",
+  minimax_tts_speed: 1,
+  minimax_tts_volume: 1,
+  minimax_tts_pitch: 0,
+  default_voice_id: null,
+  voices: [],
+  clone_enabled: false,
+  clone_model: "speech-2.8-hd",
+  clone_preview_text: "你好，我是你的语音机器人。",
+  clone_prompt_text: null,
+};
+
 const SystemSettingsSchema = z.object({
   default_mode: z.enum(["auto", "direct", "dispatch", "discuss", "hybrid"]),
   default_workflow_id: z.string().nullable(),
@@ -259,6 +322,7 @@ const SystemSettingsSchema = z.object({
   channel_entry: z.string(),
   attachment_retention_days: z.number(),
   attachment_max_mb: z.number(),
+  robot_voice: RobotVoiceSettingsSchema.default(DEFAULT_ROBOT_VOICE_SETTINGS),
 });
 
 export type SystemSettings = z.infer<typeof SystemSettingsSchema>;

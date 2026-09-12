@@ -927,6 +927,14 @@ def create_app(
                     tenant_id=configured.bootstrap_tenant_id,
                     actor_id=configured.bootstrap_tenant_id,
                 )
+            voice_admin_service = getattr(application.state, "admin_resource_service", None)
+            if voice_admin_service is not None:
+                try:
+                    saved_settings = await cast(Any, voice_admin_service).get_settings()
+                    if saved_settings.robot_voice.configured:
+                        await application.state.refresh_robot_voice_media_config(saved_settings)
+                except Exception:
+                    _LOGGER.warning("robot voice media config refresh failed", exc_info=True)
             if configured.litellm_health_url is not None:
                 extra_checks = dict(application.state.extra_readiness_checks)
                 extra_checks["litellm"] = _http_readiness_probe(
@@ -1017,6 +1025,24 @@ def create_app(
     )
     application.state.robot_voice_media_service = robot_voice_media_service
     application.state.robot_voice_media_client = robot_voice_media_client
+
+    async def refresh_robot_voice_media_config(
+        system_settings: admin.SystemSettingsResponse,
+    ) -> None:
+        old_client = getattr(application.state, "robot_voice_media_client", None)
+        admin_service = getattr(application.state, "admin_resource_service", None)
+        new_service, new_client = await _robot_voice_media_service_from_admin_settings(
+            system_settings,
+            admin_service=cast(Any, admin_service),
+            environment_settings=robot_voice_settings,
+            responder=application.state.robot_session_registry.record_async,
+        )
+        application.state.robot_voice_media_service = new_service
+        application.state.robot_voice_media_client = new_client
+        if old_client is not None and old_client is not new_client and hasattr(old_client, "aclose"):
+            await cast(Any, old_client).aclose()
+
+    application.state.refresh_robot_voice_media_config = refresh_robot_voice_media_config
     robot_device_tokens = (
         configured_settings.robot_device_tokens
         if settings is not None
@@ -1076,7 +1102,9 @@ def create_app(
         create_robot_voice_router(
             registry=application.state.robot_session_registry,
             device_tokens=application.state.robot_device_tokens,
-            media_service=robot_voice_media_service,
+            media_service_provider=lambda: getattr(
+                application.state, "robot_voice_media_service", None
+            ),
         ).routes
     )
 
@@ -1124,6 +1152,51 @@ def _robot_voice_media_service_from_settings(
             speed=settings.minimax_tts_speed,
             volume=settings.minimax_tts_volume,
             pitch=settings.minimax_tts_pitch,
+        )
+    )
+    return VoiceMediaService(
+        stt_provider=client,
+        tts_provider=client,
+        responder=cast(Any, responder),
+    ), client
+
+
+async def _robot_voice_media_service_from_admin_settings(
+    system_settings: admin.SystemSettingsResponse,
+    *,
+    admin_service: Any,
+    environment_settings: Settings,
+    responder: Callable[[Any], Awaitable[tuple[Any, ...]]],
+) -> tuple[VoiceMediaService | None, MiniMaxSpeechClient | None]:
+    voice = system_settings.robot_voice
+    if not voice.enabled or voice.media_provider == "disabled":
+        return None, None
+    if voice.media_provider != "minimax":
+        raise ValueError("unsupported robot voice media provider")
+    api_key = ""
+    if voice.minimax_credential_ref:
+        resolver = getattr(admin_service, "resolve_secret_value", None)
+        if not callable(resolver):
+            raise ValueError("MiniMax robot voice secret resolver is unavailable")
+        api_key = str(await resolver(voice.minimax_credential_ref)).strip()
+    if not api_key:
+        api_key = environment_settings.minimax_api_key_value().strip()
+    if not api_key:
+        raise ValueError("MiniMax API key is required when robot voice media uses minimax")
+    client = MiniMaxSpeechClient(
+        MiniMaxSpeechConfig(
+            api_key=api_key,
+            base_url=voice.minimax_api_base_url,
+            asr_model=voice.minimax_asr_model,
+            tts_model=voice.minimax_tts_model,
+            default_voice_id=voice.default_voice_id or voice.minimax_tts_voice_id,
+            audio_format=voice.minimax_tts_audio_format,
+            sample_rate_hz=voice.minimax_tts_sample_rate_hz,
+            bitrate=voice.minimax_tts_bitrate,
+            language_boost=voice.minimax_tts_language_boost,
+            speed=voice.minimax_tts_speed,
+            volume=voice.minimax_tts_volume,
+            pitch=voice.minimax_tts_pitch,
         )
     )
     return VoiceMediaService(

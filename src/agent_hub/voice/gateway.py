@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, Query, WebSocket, WebSocketDisconnect
@@ -57,6 +58,7 @@ def create_robot_voice_router(
     device_tokens: RobotDeviceTokenStore | None = None,
     ota_manifest: OtaManifest | None = None,
     media_service: VoiceMediaService | None = None,
+    media_service_provider: Callable[[], VoiceMediaService | None] | None = None,
 ) -> APIRouter:
     active_responder = responder or CompanionResponder()
     active_registry = registry or RobotSessionRegistry(responder=active_responder.respond_text)
@@ -142,12 +144,17 @@ def create_robot_voice_router(
                 if envelope.device_id != device_id:
                     await websocket.close(code=1008)
                     return
-                if active_media_service is not None and envelope.type in {
+                media = (
+                    media_service_provider()
+                    if media_service_provider is not None
+                    else active_media_service
+                )
+                if media is not None and envelope.type in {
                     RobotMessageType.AUDIO_START,
                     RobotMessageType.AUDIO_CHUNK,
                     RobotMessageType.AUDIO_END,
                 }:
-                    responses = await active_media_service.handle(envelope)
+                    responses = await media.handle(envelope)
                 else:
                     responses = await active_registry.record_async(envelope)
                 for response in responses:

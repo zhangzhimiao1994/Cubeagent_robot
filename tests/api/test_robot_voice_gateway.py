@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from starlette.websockets import WebSocketDisconnect
 
+from agent_hub.api.routers.admin import InMemoryAdminResourceService
 from agent_hub.app import create_app
 from agent_hub.auth.models import AuthenticatedPrincipal, InvalidCredentials, Role
 from agent_hub.domain.runs import RunStatus, TaskMode
@@ -16,6 +17,7 @@ from agent_hub.settings import Settings
 from agent_hub.voice.companion import RobotRunBridge
 from agent_hub.voice.gateway import create_robot_voice_router
 from agent_hub.voice.media import SpeechTranscript, SynthesizedAudio
+from agent_hub.voice.minimax import MiniMaxSpeechConfig
 
 ROBOT_RUN_ID = UUID("00000000-0000-4000-8000-000000000301")
 ROBOT_TENANT_ID = UUID("00000000-0000-4000-8000-000000000201")
@@ -36,6 +38,7 @@ def _client(
     *,
     run_service: object | None = None,
     run_repository: object | None = None,
+    admin_resource_service: object | None = None,
 ) -> TestClient:
     app_kwargs: dict[str, object] = {
         "auth_service": StubAuthService(),
@@ -45,6 +48,8 @@ def _client(
         app_kwargs["run_service"] = run_service
     if run_repository is not None:
         app_kwargs["run_repository"] = run_repository
+    if admin_resource_service is not None:
+        app_kwargs["admin_resource_service"] = admin_resource_service
     return TestClient(
         create_app(**app_kwargs)
     )
@@ -571,3 +576,77 @@ def test_robot_websocket_uses_minimax_media_provider_when_configured(
     ]
     assert responses[0]["payload"]["text"] == "识别文本"
     assert responses[3]["payload"]["chunk_b64"] == "bXAz"
+
+
+def test_robot_websocket_uses_robot_voice_settings_saved_from_console(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created_configs: list[MiniMaxSpeechConfig] = []
+
+    class FakeMiniMaxSpeechClient:
+        def __init__(self, config: MiniMaxSpeechConfig) -> None:
+            self.config = config
+            created_configs.append(config)
+
+        async def transcribe(self, _audio: object) -> SpeechTranscript:
+            return SpeechTranscript(text="控制台语音")
+
+        async def synthesize(self, _text: str, _options: object) -> SynthesizedAudio:
+            return SynthesizedAudio(codec="mp3", data=b"console-mp3", sample_rate_hz=32000)
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr("agent_hub.app.MiniMaxSpeechClient", FakeMiniMaxSpeechClient)
+    service = InMemoryAdminResourceService()
+    client = _client(admin_resource_service=service)
+    payload = client.get("/api/v1/admin/settings", headers=_headers()).json()
+    payload["robot_voice"] = {
+        **payload["robot_voice"],
+        "enabled": True,
+        "media_provider": "minimax",
+        "minimax_api_key": "console-minimax-key",
+        "minimax_tts_model": "speech-2.8-hd",
+        "minimax_tts_voice_id": "console-voice",
+        "default_voice_id": "console-voice",
+        "voices": [
+            {
+                "id": "console-voice",
+                "name": "控制台音色",
+                "provider": "minimax",
+                "voice_id": "console-voice",
+                "enabled": True,
+                "cloned": False,
+            }
+        ],
+    }
+
+    assert client.put("/api/v1/admin/settings", headers=_headers(), json=payload).status_code == 200
+
+    with client.websocket_connect("/api/v1/robot/ws/pi-lab-01", headers=_device_headers()) as ws:
+        for message_type, body in (
+            (
+                RobotMessageType.AUDIO_START,
+                {"codec": "wav", "sample_rate_hz": 16000, "channels": 1},
+            ),
+            (
+                RobotMessageType.AUDIO_CHUNK,
+                {"codec": "wav", "sample_rate_hz": 16000, "sequence": 1, "chunk_b64": "QUJD"},
+            ),
+            (RobotMessageType.AUDIO_END, {"total_chunks": 1}),
+        ):
+            ws.send_json(
+                build_envelope(
+                    message_type=message_type,
+                    device_id="pi-lab-01",
+                    session_id="voice-session-1",
+                    payload=body,
+                ).model_dump(mode="json")
+            )
+        responses = [ws.receive_json() for _ in range(5)]
+
+    assert responses[0]["payload"]["text"] == "控制台语音"
+    assert responses[3]["payload"]["chunk_b64"] == "Y29uc29sZS1tcDM="
+    assert created_configs[0].api_key == "console-minimax-key"
+    assert created_configs[0].tts_model == "speech-2.8-hd"
+    assert created_configs[0].default_voice_id == "console-voice"

@@ -189,6 +189,77 @@ def test_system_settings_default_openclaw_is_disabled() -> None:
     assert settings.model_dump()["openclaw_enabled"] is False
     assert settings.model_dump()["openclaw_mode"] == "ask"
     assert settings.model_dump()["openclaw_allowed_commands"] == []
+    assert settings.robot_voice.configured is False
+    assert settings.robot_voice.enabled is False
+    assert settings.robot_voice.media_provider == "disabled"
+    assert settings.robot_voice.minimax_api_key_configured is False
+    assert "minimax_api_key" not in settings.model_dump()["robot_voice"]
+
+
+@pytest.mark.asyncio
+async def test_system_settings_encrypts_robot_voice_key_and_keeps_voice_presets() -> None:
+    service = InMemoryAdminResourceService()
+
+    saved = await service.update_settings(
+        admin_router.SystemSettingsRequest(
+            robot_voice=admin_router.RobotVoiceSettings(
+                enabled=True,
+                media_provider="minimax",
+                minimax_api_key=SecretStr("minimax-secret-key"),
+                minimax_tts_model="speech-2.8-hd",
+                minimax_tts_voice_id="robot-default",
+                default_voice_id="robot-default",
+                voices=[
+                    admin_router.RobotVoicePreset(
+                        id="robot-default",
+                        name="陪伴机器人默认音色",
+                        provider="minimax",
+                        voice_id="robot-default",
+                        description="温和、自然的默认音色",
+                    )
+                ],
+                clone_enabled=True,
+                clone_model="speech-2.8-hd",
+                clone_preview_text="你好，我是你的语音机器人。",
+                clone_prompt_text="保持温和、自然、有陪伴感。",
+            )
+        )
+    )
+
+    assert saved.robot_voice.enabled is True
+    assert saved.robot_voice.media_provider == "minimax"
+    assert saved.robot_voice.minimax_api_key_configured is True
+    assert saved.robot_voice.minimax_credential_ref is not None
+    assert service.secret_values[saved.robot_voice.minimax_credential_ref] == "minimax-secret-key"
+    assert "minimax_api_key" not in saved.model_dump()["robot_voice"]
+    assert saved.robot_voice.voices[0].voice_id == "robot-default"
+    assert saved.robot_voice.clone_enabled is True
+
+
+def test_update_settings_refreshes_robot_voice_runtime_config() -> None:
+    api = client()
+    refreshed: list[SystemSettingsResponse] = []
+
+    async def refresh(settings: SystemSettingsResponse) -> None:
+        refreshed.append(settings)
+
+    cast(Any, api.app).state.refresh_robot_voice_media_config = refresh
+    payload = api.get("/api/v1/admin/settings", headers=headers()).json()
+    payload["robot_voice"] = {
+        **payload["robot_voice"],
+        "enabled": True,
+        "media_provider": "minimax",
+        "minimax_api_key": "minimax-secret-key",
+        "minimax_tts_voice_id": "robot-default",
+        "default_voice_id": "robot-default",
+    }
+
+    response = api.put("/api/v1/admin/settings", headers=headers(), json=payload)
+
+    assert response.status_code == 200
+    assert len(refreshed) == 1
+    assert refreshed[0].robot_voice.enabled is True
+    assert refreshed[0].robot_voice.minimax_api_key_configured is True
 
 
 def test_openclaw_operation_requires_feature_switch() -> None:

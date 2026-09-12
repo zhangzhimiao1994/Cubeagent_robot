@@ -31,6 +31,30 @@ const settings = {
   channel_entry: "web",
   attachment_retention_days: 7,
   attachment_max_mb: 25,
+  robot_voice: {
+    configured: false,
+    enabled: false,
+    media_provider: "disabled",
+    minimax_credential_ref: null,
+    minimax_api_key_configured: false,
+    minimax_api_base_url: "https://api.minimax.io",
+    minimax_asr_model: "asr-1.0",
+    minimax_tts_model: "speech-2.8-turbo",
+    minimax_tts_voice_id: null,
+    minimax_tts_audio_format: "mp3",
+    minimax_tts_sample_rate_hz: 32000,
+    minimax_tts_bitrate: 128000,
+    minimax_tts_language_boost: "auto",
+    minimax_tts_speed: 1,
+    minimax_tts_volume: 1,
+    minimax_tts_pitch: 0,
+    default_voice_id: null,
+    voices: [],
+    clone_enabled: false,
+    clone_model: "speech-2.8-hd",
+    clone_preview_text: "你好，我是你的语音机器人。",
+    clone_prompt_text: null,
+  },
 };
 
 function jsonResponse(payload: unknown, init: ResponseInit = {}) {
@@ -328,6 +352,57 @@ describe("ConfigPage", () => {
 
     expect((await screen.findByRole("alert")).textContent).toContain("JSON 解析失败");
   });
+
+  it("configures MiniMax robot voice, voice presets, and clone defaults", async () => {
+    const user = userEvent.setup();
+    render(<TestApp initialPath="/config" />);
+
+    expect(await screen.findByRole("heading", { name: "系统设置" })).not.toBeNull();
+    expect(screen.getByRole("group", { name: "机器人语音" })).not.toBeNull();
+
+    await user.click(screen.getByLabelText("启用服务端 ASR/TTS"));
+    await user.selectOptions(screen.getByLabelText("语音供应商"), "minimax");
+    await user.type(screen.getByLabelText("MiniMax API Key"), "minimax-live-key");
+    await user.selectOptions(screen.getByLabelText("TTS 模型"), "speech-2.8-hd");
+    await user.type(screen.getByLabelText("默认音色 voice_id"), "robot-warm-voice");
+    await user.type(screen.getByLabelText("音色名称"), "温和陪伴音色");
+    await user.click(screen.getByRole("button", { name: "加入音色列表" }));
+    await user.click(screen.getByLabelText("允许控制台发起声音克隆"));
+    fireEvent.change(screen.getByLabelText("克隆试听文本"), {
+      target: { value: "你好，我会用更自然的声音陪你聊天。" },
+    });
+    fireEvent.change(screen.getByLabelText("克隆提示文本"), {
+      target: { value: "保持自然、温和、清晰。" },
+    });
+    await user.click(screen.getByRole("button", { name: "保存系统设置" }));
+
+    const request = requests.find((item) => item.path === "/api/v1/admin/settings" && item.method === "PUT");
+    expect(request?.body).toMatchObject({
+      robot_voice: {
+        enabled: true,
+        media_provider: "minimax",
+        minimax_api_key: "minimax-live-key",
+        minimax_tts_model: "speech-2.8-hd",
+        minimax_tts_voice_id: "robot-warm-voice",
+        default_voice_id: "robot-warm-voice",
+        clone_enabled: true,
+        clone_model: "speech-2.8-hd",
+        clone_preview_text: "你好，我会用更自然的声音陪你聊天。",
+        clone_prompt_text: "保持自然、温和、清晰。",
+        voices: [
+          {
+            id: "robot-warm-voice",
+            name: "温和陪伴音色",
+            provider: "minimax",
+            voice_id: "robot-warm-voice",
+            enabled: true,
+            cloned: false,
+          },
+        ],
+      },
+    });
+  });
+
   it("keeps OpenClaw management in the dedicated control page", async () => {
     render(<TestApp initialPath="/config" />);
 
