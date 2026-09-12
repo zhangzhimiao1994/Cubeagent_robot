@@ -229,6 +229,17 @@ sudo /usr/local/lib/cube-robot/scripts/first-boot-register.sh
 device_id = "pi-lab-01"
 server_url = "ws://103.236.93.62:32020/api/v1/robot/ws/pi-lab-01"
 device_token = "replace-with-server-configured-token"
+language = "zh"
+voice_id = "replace-with-minimax-voice-id"
+tts_model = "speech-2.8-turbo"
+
+[audio]
+codec = "wav"
+sample_rate_hz = 16000
+channels = 1
+duration_seconds = 4.0
+# 如果有多个麦克风，先用 arecord -l 找到设备，再打开这一行。
+# device = "plughw:1,0"
 
 [updates]
 channel = "stable"
@@ -260,7 +271,39 @@ cd /usr/local/lib/cube-robot
 
 如果成功，应返回已发送的消息类型和收到的 assistant 文本。
 
-### 5.2 安装 systemd 服务
+### 5.2 手动 voice-once
+
+`voice-once` 会在树莓派本地录一段音频，发送到服务端做 ASR 和 Agent 处理，再播放服务端返回的 TTS 音频。树莓派不保存 MiniMax API key。
+
+先确认本机有录音和播放命令：
+
+```bash
+arecord -l
+aplay -l
+which mpg123 || which mpg321 || which mpv
+```
+
+如果没有 MP3 播放器，安装一个：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y mpg123
+```
+
+执行一轮真实语音交互：
+
+```bash
+cd /usr/local/lib/cube-robot
+.venv/bin/cube-robot voice-once --config /etc/cube-robot/robot.toml --session-id voice-session-1
+```
+
+成功时输出里应包含：
+
+- `sent_types` 包含 `audio.start`、`audio.chunk`、`audio.end`
+- `received_types` 包含 `speech.partial`、`assistant.text.done`、`tts.audio.chunk`、`tts.audio.done`
+- `played_audio_codecs` 包含 `mp3`
+
+### 5.3 安装 systemd 服务
 
 当前 service 期望 `/var/lib/cube-robot/current/bin/cube-robot` 存在。首次安装时可以把当前 venv 链到 runtime current：
 
@@ -282,7 +325,7 @@ systemctl status cube-robot.service --no-pager
 journalctl -u cube-robot.service -n 100 --no-pager
 ```
 
-### 5.3 日常使用
+### 5.4 日常使用
 
 正常使用时流程是：
 
@@ -293,7 +336,7 @@ journalctl -u cube-robot.service -n 100 --no-pager
 5. 服务端 Agent 处理输入，结合 Hermes/Memory/认知层生成回复。
 6. Pi 端播放服务端返回的 `assistant.text.done` 或后续音频流。
 
-当前代码已经打通文本 dry-run 和 WebSocket 协议。真实音频采集、TTS 播放和打断交互还需要后续模块补齐。
+当前代码已经打通文本 dry-run、音频上传、服务端 ASR/TTS provider 边界和 `voice-once` 播放。持续监听、唤醒词、打断交互和更低延迟流式播放仍属于后续增强。
 
 ## 6. OTA 使用
 
@@ -357,7 +400,35 @@ journalctl -u cube-robot-updater.service -n 100 --no-pager
 
 ## 7. Agent 端维护
 
-### 7.1 每日检查
+### 7.1 MiniMax 语音配置
+
+MiniMax API key 只放服务器，不放树莓派、不提交 Git、不写入聊天或日志。编辑服务器 `/etc/agent-hub/secrets.env`：
+
+```bash
+sudo nano /etc/agent-hub/secrets.env
+```
+
+加入或更新：
+
+```bash
+MINIMAX_API_KEY=<your-minimax-api-key>
+AGENT_HUB_ROBOT_VOICE_MEDIA_PROVIDER=minimax
+AGENT_HUB_MINIMAX_TTS_VOICE_ID=<system-or-cloned-voice-id>
+AGENT_HUB_MINIMAX_TTS_MODEL=speech-2.8-turbo
+AGENT_HUB_MINIMAX_TTS_AUDIO_FORMAT=mp3
+AGENT_HUB_MINIMAX_TTS_SAMPLE_RATE_HZ=32000
+```
+
+改完重启服务：
+
+```bash
+sudo systemctl restart agent-hub-api
+sudo systemctl status agent-hub-api --no-pager
+```
+
+如果还没有克隆音色，先用 MiniMax 官方系统音色 ID。克隆完成后，把克隆得到的 `voice_id` 写入 `AGENT_HUB_MINIMAX_TTS_VOICE_ID`，或者写入树莓派 `/etc/cube-robot/robot.toml` 的 `voice_id`。
+
+### 7.2 每日检查
 
 ```bash
 systemctl is-active agent-hub-api agent-hub-worker agent-hub-litellm caddy
@@ -375,7 +446,7 @@ python tools/robot_voice_probe.py \
   --utterance '日常巡检'
 ```
 
-### 7.2 备份
+### 7.3 备份
 
 升级、改配置、做大迁移前先备份：
 
@@ -392,7 +463,7 @@ scripts/agent-hub backup verify /tmp/agent-hub-backup.tar.gz
 - Caddy/TLS 配置
 - 模型供应商密钥
 
-### 7.3 模型、Hermes 和认知层维护
+### 7.4 模型、Hermes 和认知层维护
 
 机器人体验主要由服务端大脑决定，Pi 端只做输入输出。维护重点：
 
@@ -402,7 +473,7 @@ scripts/agent-hub backup verify /tmp/agent-hub-backup.tar.gz
 - 失败记录：认知层失败、错误决策、用户纠正和糟糕回复要进入经验/反思记录，后续检索时避免重复犯错。
 - 权限边界：普通 reflection 不能自动修改核心 SOUL、人格、安全规则和工具权限。
 
-### 7.4 清理策略
+### 7.5 清理策略
 
 可以定期清理：
 

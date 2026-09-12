@@ -15,6 +15,7 @@ from agent_hub.runs.service import SubmittedRun
 from agent_hub.settings import Settings
 from agent_hub.voice.companion import RobotRunBridge
 from agent_hub.voice.gateway import create_robot_voice_router
+from agent_hub.voice.media import SpeechTranscript, SynthesizedAudio
 
 ROBOT_RUN_ID = UUID("00000000-0000-4000-8000-000000000301")
 ROBOT_TENANT_ID = UUID("00000000-0000-4000-8000-000000000201")
@@ -503,3 +504,70 @@ def test_robot_device_tokens_are_loaded_from_environment_when_settings_are_not_i
     )
 
     assert response.status_code == 200
+
+
+def test_robot_websocket_uses_minimax_media_provider_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeMiniMaxSpeechClient:
+        def __init__(self, config: object) -> None:
+            self.config = config
+
+        async def transcribe(self, _audio: object) -> SpeechTranscript:
+            return SpeechTranscript(text="识别文本")
+
+        async def synthesize(self, _text: str, _options: object) -> SynthesizedAudio:
+            return SynthesizedAudio(codec="mp3", data=b"mp3", sample_rate_hz=32000)
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr("agent_hub.app.MiniMaxSpeechClient", FakeMiniMaxSpeechClient)
+    client = TestClient(
+        create_app(
+            settings=Settings(
+                robot_device_tokens=SecretStr("pi-lab-01:robot-token"),
+                robot_voice_media_provider="minimax",
+                minimax_api_key=SecretStr("secret"),
+                minimax_tts_voice_id="robot-voice",
+            )
+        )
+    )
+
+    with client.websocket_connect("/api/v1/robot/ws/pi-lab-01", headers=_device_headers()) as ws:
+        for message_type, payload in (
+            (
+                RobotMessageType.AUDIO_START,
+                {"codec": "wav", "sample_rate_hz": 16000, "channels": 1},
+            ),
+            (
+                RobotMessageType.AUDIO_CHUNK,
+                {"codec": "wav", "sample_rate_hz": 16000, "sequence": 1, "chunk_b64": "QUJD"},
+            ),
+            (RobotMessageType.AUDIO_END, {"total_chunks": 1}),
+        ):
+            ws.send_json(
+                build_envelope(
+                    message_type=message_type,
+                    device_id="pi-lab-01",
+                    session_id="voice-session-1",
+                    payload=payload,
+                ).model_dump(mode="json")
+            )
+        responses = [
+            ws.receive_json(),
+            ws.receive_json(),
+            ws.receive_json(),
+            ws.receive_json(),
+            ws.receive_json(),
+        ]
+
+    assert [response["type"] for response in responses] == [
+        "speech.partial",
+        "assistant.text.done",
+        "conversation.end",
+        "tts.audio.chunk",
+        "tts.audio.done",
+    ]
+    assert responses[0]["payload"]["text"] == "识别文本"
+    assert responses[3]["payload"]["chunk_b64"] == "bXAz"

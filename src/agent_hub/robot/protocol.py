@@ -42,7 +42,7 @@ class RobotMessageType(StrEnum):
 class AudioChunkPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
-    codec: Literal["pcm16", "opus"]
+    codec: Literal["pcm16", "opus", "wav", "mp3", "aac", "flac", "ogg", "m4a"]
     sample_rate_hz: int = Field(ge=8_000, le=48_000)
     sequence: int = Field(ge=1)
     chunk_b64: str = Field(min_length=1)

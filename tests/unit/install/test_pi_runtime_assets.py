@@ -177,6 +177,33 @@ def test_runtime_service_entry_point_accepts_run_config(
     assert command[-3:] == ["run", "--config", "/etc/cube-robot/robot.toml"]
 
 
+def test_runtime_voice_once_entry_point_stays_inside_pi_runtime() -> None:
+    root = Path("cube-robot-runtime")
+    main = (root / "cube_robot_runtime" / "main.py").read_text(encoding="utf-8")
+    voice_once = (root / "cube_robot_runtime" / "voice_once.py").read_text(encoding="utf-8")
+    config = (root / "config" / "robot.toml.example").read_text(encoding="utf-8")
+
+    assert "voice-once" in main
+    assert "audio.start" in voice_once
+    assert "tts.audio.done" in voice_once
+    assert "[audio]" in config
+    assert "voice_id" in config
+
+
+def test_robot_manual_documents_minimax_and_voice_once_operations() -> None:
+    manual = (Path("docs") / "robot-system-manual.md").read_text(encoding="utf-8")
+    checklist = (Path("docs") / "robot-field-test.md").read_text(encoding="utf-8")
+
+    for required in (
+        "MINIMAX_API_KEY",
+        "AGENT_HUB_ROBOT_VOICE_MEDIA_PROVIDER=minimax",
+        "voice-once",
+        "tts.audio.done",
+    ):
+        assert required in manual
+    assert "played_audio_codecs" in checklist
+
+
 def test_pi_runtime_supports_python_311() -> None:
     root = Path("cube-robot-runtime")
     pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))

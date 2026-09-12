@@ -2,6 +2,17 @@
 device_id = "replace-with-device-id"
 server_url = "wss://example.com/api/v1/robot/ws/replace-with-device-id"
 device_token = "replace-with-device-token"
+language = "zh"
+voice_id = "replace-with-minimax-voice-id"
+tts_model = "speech-2.8-turbo"
+
+[audio]
+codec = "wav"
+sample_rate_hz = 16000
+channels = 1
+duration_seconds = 4.0
+# ALSA device name, for example "plughw:1,0". Leave unset to use the default device.
+# device = "plughw:1,0"
 
 [updates]
 channel = "stable"

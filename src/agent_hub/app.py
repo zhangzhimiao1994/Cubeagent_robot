@@ -112,6 +112,8 @@ from agent_hub.security.secrets import SecretCipher, SecretService
 from agent_hub.settings import Settings, get_settings
 from agent_hub.voice.companion import CompanionResponder, RobotRunBridge
 from agent_hub.voice.gateway import create_robot_voice_router
+from agent_hub.voice.media import VoiceMediaService
+from agent_hub.voice.minimax import MiniMaxSpeechClient, MiniMaxSpeechConfig
 
 ReadinessProbe = Callable[[], Awaitable[None]]
 CleanupCallback = tuple[str, Callable[[], Awaitable[None]]]
@@ -701,6 +703,13 @@ def create_app(
             application.state.trusted_proxy_ips = configured.trusted_proxy_ips
             application.state.bootstrap_tenant_id = configured.bootstrap_tenant_id
             application.state.attachment_store_dir = configured.attachment_store_dir
+            robot_voice_media_client = getattr(
+                application.state, "robot_voice_media_client", None
+            )
+            if isinstance(robot_voice_media_client, MiniMaxSpeechClient):
+                cleanup_callbacks.append(
+                    ("robot_voice_media_client", robot_voice_media_client.aclose)
+                )
             needs_sessions = (
                 auth_service is None
                 or config_service is None
@@ -998,6 +1007,16 @@ def create_app(
     application.state.robot_session_registry = RobotSessionRegistry(
         responder=respond_robot_text
     )
+    robot_voice_settings = settings or Settings()
+    (
+        robot_voice_media_service,
+        robot_voice_media_client,
+    ) = _robot_voice_media_service_from_settings(
+        robot_voice_settings,
+        responder=application.state.robot_session_registry.record_async,
+    )
+    application.state.robot_voice_media_service = robot_voice_media_service
+    application.state.robot_voice_media_client = robot_voice_media_client
     robot_device_tokens = (
         configured_settings.robot_device_tokens
         if settings is not None
@@ -1057,6 +1076,7 @@ def create_app(
         create_robot_voice_router(
             registry=application.state.robot_session_registry,
             device_tokens=application.state.robot_device_tokens,
+            media_service=robot_voice_media_service,
         ).routes
     )
 
@@ -1076,6 +1096,41 @@ def create_app(
         return _web_ui_response(configured.web_dir, path)
 
     return application
+
+
+def _robot_voice_media_service_from_settings(
+    settings: Settings,
+    *,
+    responder: Callable[[Any], Awaitable[tuple[Any, ...]]],
+) -> tuple[VoiceMediaService | None, MiniMaxSpeechClient | None]:
+    if settings.robot_voice_media_provider == "disabled":
+        return None, None
+    if settings.robot_voice_media_provider != "minimax":
+        raise ValueError("unsupported robot voice media provider")
+    api_key = settings.minimax_api_key_value().strip()
+    if not api_key:
+        raise ValueError("MiniMax API key is required when robot voice media uses minimax")
+    client = MiniMaxSpeechClient(
+        MiniMaxSpeechConfig(
+            api_key=api_key,
+            base_url=settings.minimax_api_base_url,
+            asr_model=settings.minimax_asr_model,
+            tts_model=settings.minimax_tts_model,
+            default_voice_id=settings.minimax_tts_voice_id,
+            audio_format=settings.minimax_tts_audio_format,
+            sample_rate_hz=settings.minimax_tts_sample_rate_hz,
+            bitrate=settings.minimax_tts_bitrate,
+            language_boost=settings.minimax_tts_language_boost,
+            speed=settings.minimax_tts_speed,
+            volume=settings.minimax_tts_volume,
+            pitch=settings.minimax_tts_pitch,
+        )
+    )
+    return VoiceMediaService(
+        stt_provider=client,
+        tts_provider=client,
+        responder=cast(Any, responder),
+    ), client
 
 
 async def _cancel_background_tasks(tasks: set[asyncio.Task[object]]) -> None:

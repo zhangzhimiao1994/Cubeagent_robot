@@ -10,7 +10,13 @@
       "codec": {
         "enum": [
           "pcm16",
-          "opus"
+          "opus",
+          "wav",
+          "mp3",
+          "aac",
+          "flac",
+          "ogg",
+          "m4a"
         ],
         "title": "Codec",
         "type": "string"

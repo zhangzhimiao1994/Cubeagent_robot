@@ -45,6 +45,14 @@ python tools/robot_voice_probe.py --base-url http://103.236.93.62:32020 --device
 - [ ] Verify microphone device selection with a short local audio capture.
 - [ ] Record a five-second audio capture in the expected format and confirm the file is non-empty.
 - [ ] Verify speaker output with local playback before starting the robot service.
+- [ ] Confirm prod-web-02 has `MINIMAX_API_KEY`, `AGENT_HUB_ROBOT_VOICE_MEDIA_PROVIDER=minimax`, and a configured MiniMax `voice_id` in `/etc/agent-hub/secrets.env`.
+- [ ] Run one manual voice turn:
+
+```bash
+/usr/local/lib/cube-robot/.venv/bin/cube-robot voice-once --config /etc/cube-robot/robot.toml --session-id voice-session-1
+```
+
+- [ ] Confirm `voice-once` reports `tts.audio.chunk`, `tts.audio.done`, and `played_audio_codecs`.
 - [ ] Start `cube-robot.service` and confirm one spoken utterance produces playback from the assistant response.
 - [ ] Keep one fallback text utterance test available if audio capture fails, so the WebSocket path can still be validated.
 

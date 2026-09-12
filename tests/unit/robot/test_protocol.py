@@ -81,9 +81,9 @@ def test_robot_envelope_rejects_naive_timestamp() -> None:
 
 
 def test_audio_chunk_payload_bounds_sequence_and_base64() -> None:
-    payload = AudioChunkPayload(codec="pcm16", sample_rate_hz=16000, sequence=1, chunk_b64="AQID")
+    payload = AudioChunkPayload(codec="wav", sample_rate_hz=16000, sequence=1, chunk_b64="AQID")
 
-    assert payload.codec == "pcm16"
+    assert payload.codec == "wav"
     assert payload.sample_rate_hz == 16000
 
     with pytest.raises(ValidationError):

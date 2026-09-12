@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import ClassVar
 from uuid import UUID
 
-from pydantic import Field, SecretStr, ValidationInfo, field_validator
+from pydantic import AliasChoices, Field, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from agent_hub.security.network import canonical_ip
@@ -54,6 +54,24 @@ class Settings(BaseSettings):
     generated_artifact_dir: Path = Path("/var/lib/agent-hub/generated-artifacts")
     litellm_health_url: str | None = None
     robot_device_tokens: SecretStr = SecretStr("")
+    robot_voice_media_provider: str = Field(
+        default="disabled", pattern=r"^(disabled|minimax)$"
+    )
+    minimax_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("AGENT_HUB_MINIMAX_API_KEY", "MINIMAX_API_KEY"),
+    )
+    minimax_api_base_url: str = Field(default="https://api.minimax.io")
+    minimax_asr_model: str = Field(default="asr-1.0")
+    minimax_tts_model: str = Field(default="speech-2.8-turbo")
+    minimax_tts_voice_id: str | None = None
+    minimax_tts_audio_format: str = Field(default="mp3", pattern=r"^(mp3|wav|flac|pcm|opus)$")
+    minimax_tts_sample_rate_hz: int = Field(default=32000, ge=8000, le=44100)
+    minimax_tts_bitrate: int = Field(default=128000, ge=32000, le=256000)
+    minimax_tts_language_boost: str | None = "auto"
+    minimax_tts_speed: float = Field(default=1.0, ge=0.5, le=2.0)
+    minimax_tts_volume: float = Field(default=1.0, gt=0, le=10.0)
+    minimax_tts_pitch: int = Field(default=0, ge=-12, le=12)
     bootstrap_tenant_id: UUID = UUID("00000000-0000-4000-8000-000000000001")
     bootstrap_tenant_slug: str = Field(
         default="default", min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9-]*$"
@@ -93,6 +111,11 @@ class Settings(BaseSettings):
         """Return robot device token config only at the device auth boundary."""
 
         return self.robot_device_tokens.get_secret_value()
+
+    def minimax_api_key_value(self) -> str:
+        """Return the MiniMax API key only at the provider boundary."""
+
+        return self.minimax_api_key.get_secret_value()
 
     def master_key_bytes(self) -> bytes:
         """Return the configured AES-256 master key decoded from base64."""
