@@ -245,6 +245,7 @@ const RobotVoicePresetSchema = z.object({
   description: z.string().nullable().optional(),
   enabled: z.boolean().default(true),
   cloned: z.boolean().default(false),
+  builtin: z.boolean().default(false),
   created_at: z.string().nullable().optional(),
   updated_at: z.string().nullable().optional(),
 });

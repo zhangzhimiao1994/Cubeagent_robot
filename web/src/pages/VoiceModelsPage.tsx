@@ -6,6 +6,7 @@ import {
   ApiError,
   formatApiError,
   type RobotVoiceCloneJob,
+  type RobotVoicePreset,
   type RobotVoiceSettings,
 } from "../api/client";
 
@@ -27,6 +28,10 @@ function cloneSettings(settings: RobotVoiceSettings): RobotVoiceSettings {
     voices: [...settings.voices],
     clone_jobs: [...settings.clone_jobs],
   };
+}
+
+function voiceOptionLabel(voice: RobotVoicePreset): string {
+  return `${voice.name} - ${voice.voice_id}`;
 }
 
 export function VoiceModelsPage() {
@@ -79,6 +84,7 @@ export function VoiceModelsPage() {
         description: presetDraft.description.trim() || null,
         enabled: true,
         cloned: false,
+        builtin: false,
         created_at: null,
         updated_at: null,
       });
@@ -135,6 +141,9 @@ export function VoiceModelsPage() {
   if (!settings) return <p role="alert">语音模型配置加载失败：后端没有返回设置内容。</p>;
 
   const cloneJobs: RobotVoiceCloneJob[] = jobsQuery.data ?? settings.clone_jobs;
+  const voiceOptions = settings.voices.filter((voice) => voice.enabled);
+  const selectedVoiceId = settings.default_voice_id ?? settings.minimax_tts_voice_id ?? "";
+  const selectedVoiceIsPreset = voiceOptions.some((voice) => voice.voice_id === selectedVoiceId);
 
   function updateSettings(patch: Partial<RobotVoiceSettings>) {
     setSettings((current) => (current ? { ...current, ...patch } : current));
@@ -262,10 +271,26 @@ export function VoiceModelsPage() {
               </select>
             </label>
             <label htmlFor="robot-default-voice-id">
-              默认音色 voice_id
-              <input
+              默认音色
+              <select
                 id="robot-default-voice-id"
-                value={settings.minimax_tts_voice_id ?? ""}
+                value={selectedVoiceIsPreset ? selectedVoiceId : ""}
+                onChange={(event) => updateDefaultVoice(event.target.value)}
+              >
+                <option value="">未设置</option>
+                {voiceOptions.map((voice) => (
+                  <option key={voice.id} value={voice.voice_id}>
+                    {voiceOptionLabel(voice)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label htmlFor="robot-custom-default-voice-id">
+              自定义 voice_id
+              <input
+                id="robot-custom-default-voice-id"
+                placeholder="粘贴 MiniMax 新音色或外部生成的 voice_id"
+                value={selectedVoiceIsPreset ? "" : selectedVoiceId}
                 onChange={(event) => updateDefaultVoice(event.target.value)}
               />
             </label>
@@ -380,13 +405,16 @@ export function VoiceModelsPage() {
               {settings.voices.map((voice) => (
                 <li key={voice.id}>
                   {voice.name}：{voice.voice_id}
-                  <button
-                    type="button"
-                    className="danger-action"
-                    onClick={() => deletePreset.mutate(voice.id)}
-                  >
-                    删除
-                  </button>
+                  {voice.builtin ? <span className="field-help"> 内置</span> : null}
+                  {voice.builtin ? null : (
+                    <button
+                      type="button"
+                      className="danger-action"
+                      onClick={() => deletePreset.mutate(voice.id)}
+                    >
+                      删除
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>

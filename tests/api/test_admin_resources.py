@@ -232,7 +232,8 @@ async def test_system_settings_encrypts_robot_voice_key_and_keeps_voice_presets(
     assert saved.robot_voice.minimax_credential_ref is not None
     assert service.secret_values[saved.robot_voice.minimax_credential_ref] == "minimax-secret-key"
     assert "minimax_api_key" not in saved.model_dump()["robot_voice"]
-    assert saved.robot_voice.voices[0].voice_id == "robot-default"
+    saved_default = next(voice for voice in saved.robot_voice.voices if voice.voice_id == "robot-default")
+    assert saved_default.builtin is False
     assert saved.robot_voice.clone_enabled is True
 
 
@@ -299,6 +300,57 @@ def test_robot_voice_settings_dedicated_api_updates_runtime_config() -> None:
     assert get_response.json()["default_voice_id"] == "robot-default"
 
 
+def test_robot_voice_settings_include_builtin_minimax_voice_presets() -> None:
+    api = client()
+
+    response = api.get("/api/v1/admin/robot/voice-settings", headers=headers())
+
+    assert response.status_code == 200
+    payload = response.json()
+    builtin_voice_ids = {voice["voice_id"] for voice in payload["voices"] if voice["builtin"]}
+    assert {
+        "Chinese (Mandarin)_Warm_Girl",
+        "Chinese (Mandarin)_Warm_Bestie",
+        "Chinese (Mandarin)_Gentle_Youth",
+        "Chinese (Mandarin)_Reliable_Executive",
+    }.issubset(builtin_voice_ids)
+
+
+def test_robot_voice_settings_keep_sixty_four_custom_voices_with_builtin_presets() -> None:
+    api = client()
+    current = api.get("/api/v1/admin/settings", headers=headers()).json()
+    custom_voices = [
+        {
+            "id": f"custom-voice-{index:02d}",
+            "name": f"自定义音色 {index:02d}",
+            "provider": "minimax",
+            "voice_id": f"custom-voice-{index:02d}",
+            "description": None,
+            "enabled": True,
+            "cloned": index % 2 == 0,
+            "builtin": False,
+        }
+        for index in range(64)
+    ]
+    current["robot_voice"] = {
+        **current["robot_voice"],
+        "voices": custom_voices,
+        "default_voice_id": "custom-voice-63",
+        "minimax_tts_voice_id": "custom-voice-63",
+    }
+
+    update_response = api.put("/api/v1/admin/settings", headers=headers(), json=current)
+    get_response = api.get("/api/v1/admin/robot/voice-settings", headers=headers())
+
+    assert update_response.status_code == 200
+    assert get_response.status_code == 200
+    returned = get_response.json()["voices"]
+    assert len([voice for voice in returned if voice["builtin"]]) >= 6
+    custom_ids = {voice["voice_id"] for voice in returned if not voice["builtin"]}
+    assert len(custom_ids) == 64
+    assert "custom-voice-63" in custom_ids
+
+
 def test_robot_voice_presets_can_be_added_and_deleted_through_dedicated_api() -> None:
     api = client()
 
@@ -317,26 +369,69 @@ def test_robot_voice_presets_can_be_added_and_deleted_through_dedicated_api() ->
     )
 
     assert create_response.status_code == 201
-    assert create_response.json()["voices"] == [
-        {
-            "id": "warm-voice",
-            "name": "温和音色",
-            "provider": "minimax",
-            "voice_id": "warm-voice",
-            "description": "适合陪伴聊天",
-            "enabled": True,
-            "cloned": False,
-            "created_at": None,
-            "updated_at": None,
-        }
-    ]
+    saved_voice = next(voice for voice in create_response.json()["voices"] if voice["id"] == "warm-voice")
+    assert saved_voice == {
+        "id": "warm-voice",
+        "name": "温和音色",
+        "provider": "minimax",
+        "voice_id": "warm-voice",
+        "description": "适合陪伴聊天",
+        "enabled": True,
+        "cloned": False,
+        "builtin": False,
+        "created_at": None,
+        "updated_at": None,
+    }
     assert create_response.json()["default_voice_id"] == "warm-voice"
 
     delete_response = api.delete("/api/v1/admin/robot/voices/warm-voice", headers=headers())
 
     assert delete_response.status_code == 200
-    assert delete_response.json()["voices"] == []
-    assert delete_response.json()["default_voice_id"] is None
+    assert any(voice["builtin"] for voice in delete_response.json()["voices"])
+    assert delete_response.json()["default_voice_id"] == "Chinese (Mandarin)_Warm_Girl"
+
+
+def test_robot_voice_preset_rejects_builtin_id_or_voice_id_collisions() -> None:
+    api = client()
+
+    id_collision = api.post(
+        "/api/v1/admin/robot/voices",
+        headers=headers(),
+        json={
+            "id": "minimax-cn-warm-girl",
+            "name": "冲突音色",
+            "provider": "minimax",
+            "voice_id": "custom-conflict-id",
+            "description": None,
+            "enabled": True,
+            "cloned": False,
+        },
+    )
+    voice_id_collision = api.post(
+        "/api/v1/admin/robot/voices",
+        headers=headers(),
+        json={
+            "id": "custom-warm-girl",
+            "name": "冲突音色",
+            "provider": "minimax",
+            "voice_id": "Chinese (Mandarin)_Warm_Girl",
+            "description": None,
+            "enabled": True,
+            "cloned": False,
+        },
+    )
+
+    assert id_collision.status_code == 422
+    assert voice_id_collision.status_code == 422
+
+
+def test_robot_voice_builtin_presets_cannot_be_deleted() -> None:
+    api = client()
+
+    response = api.delete("/api/v1/admin/robot/voices/minimax-cn-warm-girl", headers=headers())
+
+    assert response.status_code == 422
+    assert response.json()["error"]["message"] == "built-in voice presets cannot be deleted"
 
 
 def test_robot_voice_clone_upload_records_job_and_adds_cloned_voice() -> None:
@@ -430,7 +525,8 @@ def test_robot_voice_clone_upload_records_job_and_adds_cloned_voice() -> None:
 
     settings_response = api.get("/api/v1/admin/robot/voice-settings", headers=headers())
     assert settings_response.status_code == 200
-    assert settings_response.json()["voices"][0] | {
+    cloned_voice = next(voice for voice in settings_response.json()["voices"] if voice["id"] == "cloned-warm")
+    assert cloned_voice | {
         "created_at": None,
         "updated_at": None,
     } == {
@@ -441,6 +537,7 @@ def test_robot_voice_clone_upload_records_job_and_adds_cloned_voice() -> None:
         "description": "MiniMax Voice Clone 生成音色",
         "enabled": True,
         "cloned": True,
+        "builtin": False,
         "created_at": None,
         "updated_at": None,
     }

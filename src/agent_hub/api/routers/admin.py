@@ -111,6 +111,45 @@ _OPENAI_COMPATIBLE_AUTH_HINT = (
 )
 _ROBOT_VOICE_ID_PATTERN = r"^[A-Za-z](?:[A-Za-z0-9_-]{6,126}[A-Za-z0-9])$"
 _MAX_ROBOT_VOICE_CLONE_AUDIO_BYTES = 20 * 1024 * 1024
+_MAX_CUSTOM_ROBOT_VOICES = 64
+_BUILTIN_MINIMAX_ROBOT_VOICES: tuple[dict[str, object], ...] = (
+    {
+        "id": "minimax-cn-warm-girl",
+        "name": "温暖女声",
+        "voice_id": "Chinese (Mandarin)_Warm_Girl",
+        "description": "MiniMax 内置中文陪伴音色",
+    },
+    {
+        "id": "minimax-cn-warm-bestie",
+        "name": "温暖闺蜜",
+        "voice_id": "Chinese (Mandarin)_Warm_Bestie",
+        "description": "MiniMax 内置中文陪伴音色",
+    },
+    {
+        "id": "minimax-cn-gentle-youth",
+        "name": "温和青年",
+        "voice_id": "Chinese (Mandarin)_Gentle_Youth",
+        "description": "MiniMax 内置中文陪伴音色",
+    },
+    {
+        "id": "minimax-cn-reliable-executive",
+        "name": "可靠男声",
+        "voice_id": "Chinese (Mandarin)_Reliable_Executive",
+        "description": "MiniMax 内置中文稳重音色",
+    },
+    {
+        "id": "minimax-cn-news-anchor",
+        "name": "新闻主播",
+        "voice_id": "Chinese (Mandarin)_News_Anchor",
+        "description": "MiniMax 内置中文清晰播报音色",
+    },
+    {
+        "id": "minimax-cn-sweet-lady",
+        "name": "甜美女声",
+        "voice_id": "Chinese (Mandarin)_Sweet_Lady",
+        "description": "MiniMax 内置中文亲和音色",
+    },
+)
 
 
 class ModelDeploymentRequest(BaseModel):
@@ -733,6 +772,7 @@ class RobotVoicePreset(BaseModel):
     description: str | None = Field(default=None, max_length=1_000)
     enabled: bool = True
     cloned: bool = False
+    builtin: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -777,7 +817,10 @@ class RobotVoiceSettings(BaseModel):
     minimax_tts_volume: float = Field(default=1.0, ge=0.1, le=10.0)
     minimax_tts_pitch: int = Field(default=0, ge=-12, le=12)
     default_voice_id: str | None = Field(default=None, max_length=128)
-    voices: list[RobotVoicePreset] = Field(default_factory=list, max_length=64)
+    voices: list[RobotVoicePreset] = Field(
+        default_factory=list,
+        max_length=_MAX_CUSTOM_ROBOT_VOICES + len(_BUILTIN_MINIMAX_ROBOT_VOICES),
+    )
     clone_enabled: bool = False
     clone_model: str = Field(default="speech-2.8-hd", min_length=1, max_length=128)
     clone_preview_text: str = Field(
@@ -800,6 +843,31 @@ class RobotVoiceSettings(BaseModel):
             )
         normalized_path = parsed.path.rstrip("/")
         return urlunsplit((parsed.scheme, parsed.netloc, normalized_path, "", ""))
+
+
+def _builtin_robot_voice_presets() -> list[RobotVoicePreset]:
+    return [
+        RobotVoicePreset(
+            provider="minimax",
+            enabled=True,
+            cloned=False,
+            builtin=True,
+            **preset,
+        )
+        for preset in _BUILTIN_MINIMAX_ROBOT_VOICES
+    ]
+
+
+def _with_builtin_robot_voice_presets(settings: RobotVoiceSettings) -> RobotVoiceSettings:
+    builtin = _builtin_robot_voice_presets()
+    builtin_ids = {voice.id for voice in builtin}
+    builtin_voice_ids = {voice.voice_id for voice in builtin}
+    custom = [
+        voice.model_copy(update={"builtin": False})
+        for voice in settings.voices
+        if not voice.builtin and voice.id not in builtin_ids and voice.voice_id not in builtin_voice_ids
+    ]
+    return settings.model_copy(update={"voices": [*builtin, *custom]})
 
 
 class SystemSettingsRequest(BaseModel):
@@ -863,6 +931,12 @@ async def _system_settings_response_from_request(
     return response.model_copy(update={"robot_voice": robot_voice})
 
 
+def _with_robot_voice_defaults(settings: SystemSettingsResponse) -> SystemSettingsResponse:
+    return settings.model_copy(
+        update={"robot_voice": _with_builtin_robot_voice_presets(settings.robot_voice)}
+    )
+
+
 async def _robot_voice_settings_from_request(
     request: RobotVoiceSettings,
     *,
@@ -892,11 +966,13 @@ async def _robot_voice_settings_from_request(
         or request.clone_preview_text != RobotVoiceSettings().clone_preview_text
         or bool(request.clone_prompt_text)
     )
-    return voice.model_copy(
-        update={
-            "configured": configured,
-            "minimax_api_key_configured": bool(voice.minimax_credential_ref),
-        }
+    return _with_builtin_robot_voice_presets(
+        voice.model_copy(
+            update={
+                "configured": configured,
+                "minimax_api_key_configured": bool(voice.minimax_credential_ref),
+            }
+        )
     )
 
 
@@ -8010,7 +8086,7 @@ async def get_settings(
     service: Annotated[AdminResourceService, Depends(_service)],
 ) -> SystemSettingsResponse:
     _require(principal, "config:read")
-    return await service.get_settings()
+    return _with_robot_voice_defaults(await service.get_settings())
 
 
 @router.put(
@@ -8029,7 +8105,7 @@ async def update_settings(
         result = refresh(saved)
         if inspect.isawaitable(result):
             await result
-    return saved
+    return _with_robot_voice_defaults(saved)
 
 
 async def _save_robot_voice_settings(
@@ -8038,6 +8114,7 @@ async def _save_robot_voice_settings(
     request: Request,
     service: AdminResourceService,
 ) -> RobotVoiceSettings:
+    voice = _with_builtin_robot_voice_presets(voice)
     current = await service.get_settings()
     payload = current.model_dump()
     payload["robot_voice"] = voice
@@ -8047,7 +8124,7 @@ async def _save_robot_voice_settings(
         result = refresh(saved)
         if inspect.isawaitable(result):
             await result
-    return saved.robot_voice
+    return _with_builtin_robot_voice_presets(saved.robot_voice)
 
 
 @router.get(
@@ -8060,7 +8137,7 @@ async def get_robot_voice_settings(
     service: Annotated[AdminResourceService, Depends(_service)],
 ) -> RobotVoiceSettings:
     _require(principal, "config:read")
-    return (await service.get_settings()).robot_voice
+    return _with_builtin_robot_voice_presets((await service.get_settings()).robot_voice)
 
 
 @router.put(
@@ -8091,7 +8168,16 @@ async def create_robot_voice_preset(
     service: Annotated[AdminResourceService, Depends(_service)],
 ) -> RobotVoiceSettings:
     _require(principal, "config:write")
-    current = (await service.get_settings()).robot_voice
+    current = _with_builtin_robot_voice_presets((await service.get_settings()).robot_voice)
+    builtin = _builtin_robot_voice_presets()
+    if body.id in {voice.id for voice in builtin} or body.voice_id in {
+        voice.voice_id for voice in builtin
+    }:
+        raise PublicAPIError(
+            422,
+            "request_validation",
+            "voice preset conflicts with a built-in MiniMax voice",
+        )
     voices = [voice for voice in current.voices if voice.id != body.id]
     voices.append(body)
     default_voice_id = current.default_voice_id or body.voice_id
@@ -8118,11 +8204,13 @@ async def delete_robot_voice_preset(
     service: Annotated[AdminResourceService, Depends(_service)],
 ) -> RobotVoiceSettings:
     _require(principal, "config:write")
-    current = (await service.get_settings()).robot_voice
+    current = _with_builtin_robot_voice_presets((await service.get_settings()).robot_voice)
     remaining = [voice for voice in current.voices if voice.id != voice_id]
     if len(remaining) == len(current.voices):
         raise PublicAPIError(404, "not_found", "voice preset was not found")
     deleted = next(voice for voice in current.voices if voice.id == voice_id)
+    if deleted.builtin:
+        raise PublicAPIError(422, "request_validation", "built-in voice presets cannot be deleted")
     default_voice_id = current.default_voice_id
     if default_voice_id in {deleted.id, deleted.voice_id}:
         default_voice_id = remaining[0].voice_id if remaining else None
@@ -8172,7 +8260,7 @@ async def create_robot_voice_clone(
             "voice_clone_authorization_required",
             "voice cloning requires explicit authorization confirmation",
         )
-    current = (await service.get_settings()).robot_voice
+    current = _with_builtin_robot_voice_presets((await service.get_settings()).robot_voice)
     if not current.clone_enabled:
         raise PublicAPIError(409, "voice_clone_disabled", "voice cloning is disabled")
     source_bytes = await _read_robot_voice_clone_upload(

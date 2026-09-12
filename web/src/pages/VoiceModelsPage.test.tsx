@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -18,6 +18,7 @@ type VoicePresetFixture = {
   description: string | null;
   enabled: boolean;
   cloned: boolean;
+  builtin: boolean;
   created_at: string | null;
   updated_at: string | null;
 };
@@ -83,7 +84,32 @@ const voiceSettings: VoiceSettingsFixture = {
   minimax_tts_volume: 1,
   minimax_tts_pitch: 0,
   default_voice_id: null,
-  voices: [],
+  voices: [
+    {
+      id: "Chinese (Mandarin)_Warm_Girl",
+      name: "温暖女声",
+      provider: "minimax",
+      voice_id: "Chinese (Mandarin)_Warm_Girl",
+      description: "MiniMax 内置中文陪伴音色",
+      enabled: true,
+      cloned: false,
+      builtin: true,
+      created_at: null,
+      updated_at: null,
+    },
+    {
+      id: "Chinese (Mandarin)_Gentle_Youth",
+      name: "温和青年",
+      provider: "minimax",
+      voice_id: "Chinese (Mandarin)_Gentle_Youth",
+      description: "MiniMax 内置中文陪伴音色",
+      enabled: true,
+      cloned: false,
+      builtin: true,
+      created_at: null,
+      updated_at: null,
+    },
+  ],
   clone_enabled: false,
   clone_model: "speech-2.8-hd",
   clone_preview_text: "你好，我是你的语音机器人。",
@@ -172,17 +198,18 @@ describe("VoiceModelsPage", () => {
             default_voice_id: job.voice_id,
             voices: [
               ...currentVoiceSettings.voices,
-              {
-                id: job.voice_id,
-                name: job.voice_name,
-                provider: "minimax",
-                voice_id: job.voice_id,
-                description: "MiniMax Voice Clone 生成音色",
-                enabled: true,
-                cloned: true,
-                created_at: null,
-                updated_at: null,
-              },
+            {
+              id: job.voice_id,
+              name: job.voice_name,
+              provider: "minimax",
+              voice_id: job.voice_id,
+              description: "MiniMax Voice Clone 生成音色",
+              enabled: true,
+              cloned: true,
+              builtin: false,
+              created_at: null,
+              updated_at: null,
+            },
             ],
             clone_jobs: [job],
           };
@@ -208,9 +235,7 @@ describe("VoiceModelsPage", () => {
     await user.selectOptions(screen.getByLabelText("语音供应商"), "minimax");
     await user.type(screen.getByLabelText("MiniMax API Key"), "minimax-live-key");
     await user.selectOptions(screen.getByLabelText("TTS 模型"), "speech-2.8-hd");
-    fireEvent.change(screen.getByLabelText("默认音色 voice_id"), {
-      target: { value: "robot-default" },
-    });
+    await user.selectOptions(screen.getByLabelText("默认音色"), "Chinese (Mandarin)_Warm_Girl");
     await user.click(screen.getByLabelText("允许控制台发起声音克隆"));
     await user.click(screen.getByRole("button", { name: "保存语音模型配置" }));
 
@@ -222,8 +247,8 @@ describe("VoiceModelsPage", () => {
           media_provider: "minimax",
           minimax_api_key: "minimax-live-key",
           minimax_tts_model: "speech-2.8-hd",
-          minimax_tts_voice_id: "robot-default",
-          default_voice_id: "robot-default",
+          minimax_tts_voice_id: "Chinese (Mandarin)_Warm_Girl",
+          default_voice_id: "Chinese (Mandarin)_Warm_Girl",
           clone_enabled: true,
         },
       });
@@ -243,6 +268,7 @@ describe("VoiceModelsPage", () => {
         voice_id: "warm-voice",
         enabled: true,
         cloned: false,
+        builtin: false,
       },
     });
 
@@ -256,6 +282,7 @@ describe("VoiceModelsPage", () => {
     await user.click(screen.getByRole("button", { name: "上传并克隆音色" }));
 
     expect(await screen.findByText("克隆温和音色")).not.toBeNull();
+    expect(screen.getByRole("option", { name: "克隆温和音色 - cloned-warm" })).not.toBeNull();
     expect(requests.find((request) => request.path === "/api/v1/admin/robot/voice-clones")).toMatchObject({
       method: "POST",
       body: {
