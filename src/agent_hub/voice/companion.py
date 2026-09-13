@@ -320,7 +320,7 @@ def _runtime_failure_reason(events: object) -> str | None:
     for event in reversed(events):
         if not isinstance(event, Mapping):
             continue
-        if event.get("type") != "runtime.failed":
+        if (event.get("kind") or event.get("type")) != "runtime.failed":
             continue
         reason = event.get("reason")
         if isinstance(reason, str) and reason:

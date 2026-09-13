@@ -452,7 +452,7 @@ def test_robot_websocket_reports_runtime_not_configured_when_run_fails_without_a
         (),
         events=(
             {
-                "type": "runtime.failed",
+                "kind": "runtime.failed",
                 "reason": "runtime_not_configured",
                 "payload": {"error": {"code": "runtime.not_configured"}},
             },
