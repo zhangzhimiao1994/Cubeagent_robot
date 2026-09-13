@@ -5,17 +5,18 @@ import json
 import signal
 import tomllib
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import Event
 
 from cube_robot_runtime.audio.capture import AudioCaptureConfig, CommandAudioCapture
 from cube_robot_runtime.audio.playback import CommandAudioPlayback, PlaybackRecorder
 from cube_robot_runtime.device.identity import DeviceIdentity
+from cube_robot_runtime.listen import ListenConfig, run_listen_loop
 from cube_robot_runtime.network.client import open_connection
 from cube_robot_runtime.ota.updater import apply_update, check_for_update
 from cube_robot_runtime.protocol.messages import RobotEnvelope
-from cube_robot_runtime.voice_once import VoiceOnceConfig, run_voice_once
+from cube_robot_runtime.voice_once import VoiceOnceConfig, VoiceOnceResult, run_voice_once
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,11 @@ class RuntimeConfig:
     voice_id: str | None = None
     tts_model: str | None = None
     capture: AudioCaptureConfig = field(default_factory=AudioCaptureConfig)
+    listen_probe_duration_seconds: float = 0.75
+    listen_voice_threshold: float = 0.02
+    listen_idle_sleep_seconds: float = 0.2
+    listen_cooldown_seconds: float = 0.75
+    listen_session_id_prefix: str = "listen"
 
 
 @dataclass(frozen=True)
@@ -77,10 +83,13 @@ def load_runtime_config(path: Path) -> RuntimeConfig:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     runtime = data.get("runtime")
     audio = data.get("audio", {})
+    listen = data.get("listen", {})
     if not isinstance(runtime, dict):
         raise TypeError("config must contain a runtime table")
     if not isinstance(audio, dict):
         raise TypeError("config audio table must be an object when set")
+    if not isinstance(listen, dict):
+        raise TypeError("config listen table must be an object when set")
     device_id = runtime.get("device_id")
     server_url = runtime.get("server_url")
     device_token = runtime.get("device_token")
@@ -104,6 +113,15 @@ def load_runtime_config(path: Path) -> RuntimeConfig:
             duration_seconds=_optional_positive_float(audio, "duration_seconds", default=4.0),
             device=_optional_string(audio, "device"),
         ),
+        listen_probe_duration_seconds=_optional_positive_float(
+            listen,
+            "probe_duration_seconds",
+            default=0.75,
+        ),
+        listen_voice_threshold=_optional_positive_float(listen, "voice_threshold", default=0.02),
+        listen_idle_sleep_seconds=_optional_non_negative_float(listen, "idle_sleep_seconds", default=0.2),
+        listen_cooldown_seconds=_optional_non_negative_float(listen, "cooldown_seconds", default=0.75),
+        listen_session_id_prefix=_optional_string(listen, "session_id_prefix", default="listen") or "listen",
     )
 
 
@@ -147,6 +165,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     voice_once.add_argument("--config", type=Path, required=True)
     voice_once.add_argument("--session-id", default="voice-once-session")
     voice_once.add_argument("--player")
+    listen = subcommands.add_parser("listen")
+    listen.add_argument("--config", type=Path, required=True)
+    listen.add_argument("--player")
+    listen.add_argument("--max-turns", type=int)
+    listen.add_argument("--probe-duration-seconds", type=float)
+    listen.add_argument("--voice-threshold", type=float)
+    listen.add_argument("--idle-sleep-seconds", type=float)
+    listen.add_argument("--cooldown-seconds", type=float)
+    listen.add_argument("--session-id-prefix")
     ota_check = subcommands.add_parser("ota-check")
     ota_check.add_argument("--config", type=Path, required=True)
     ota_check.add_argument("--state-dir", type=Path, default=Path("/var/lib/cube-robot"))
@@ -188,6 +215,56 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ensure_ascii=False,
             )
         )
+        return 0
+    if args.command == "listen":
+        config = load_runtime_config(args.config)
+        stop_event = Event()
+        probe_duration_seconds = (
+            args.probe_duration_seconds
+            if args.probe_duration_seconds is not None
+            else config.listen_probe_duration_seconds
+        )
+        voice_threshold = args.voice_threshold if args.voice_threshold is not None else config.listen_voice_threshold
+        idle_sleep_seconds = (
+            args.idle_sleep_seconds if args.idle_sleep_seconds is not None else config.listen_idle_sleep_seconds
+        )
+        cooldown_seconds = args.cooldown_seconds if args.cooldown_seconds is not None else config.listen_cooldown_seconds
+        session_id_prefix = args.session_id_prefix or config.listen_session_id_prefix
+        probe_config = replace(config.capture, duration_seconds=probe_duration_seconds)
+
+        def request_stop(_signum: int, _frame: object) -> None:
+            stop_event.set()
+
+        def run_turn(session_id: str) -> VoiceOnceResult:
+            return run_voice_once(
+                _voice_once_config(config, session_id),
+                capture=CommandAudioCapture(config.capture),
+                playback=CommandAudioPlayback(player=args.player),
+            )
+
+        handled_signals = (signal.SIGTERM, signal.SIGINT)
+        previous_handlers = {signum: signal.signal(signum, request_stop) for signum in handled_signals}
+        try:
+            result = run_listen_loop(
+                ListenConfig(
+                    device_id=config.device_id,
+                    probe=probe_config,
+                    threshold=voice_threshold,
+                    max_turns=args.max_turns,
+                    idle_sleep_seconds=idle_sleep_seconds,
+                    cooldown_seconds=cooldown_seconds,
+                    session_id_prefix=session_id_prefix,
+                ),
+                probe_capture=CommandAudioCapture(probe_config),
+                run_turn=run_turn,
+                stop_event=stop_event,
+            )
+        except KeyboardInterrupt:
+            return 0
+        finally:
+            for signum, previous_handler in previous_handlers.items():
+                signal.signal(signum, previous_handler)
+        print(json.dumps({"probes": result.probes, "triggered_turns": result.triggered_turns}, ensure_ascii=False))
         return 0
     if args.command == "ota-check":
         config = load_runtime_config(args.config)
@@ -252,6 +329,13 @@ def _optional_positive_float(data: dict[str, object], key: str, *, default: floa
     value = data.get(key, default)
     if not isinstance(value, int | float) or isinstance(value, bool) or value <= 0:
         raise ValueError(f"{key} must be a positive number")
+    return float(value)
+
+
+def _optional_non_negative_float(data: dict[str, object], key: str, *, default: float) -> float:
+    value = data.get(key, default)
+    if not isinstance(value, int | float) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"{key} must be a non-negative number")
     return float(value)
 
 

@@ -53,6 +53,13 @@ python tools/robot_voice_probe.py --base-url http://103.236.93.62:32020 --device
 ```
 
 - [ ] Confirm `voice-once` reports `tts.audio.chunk`, `tts.audio.done`, and `played_audio_codecs`.
+- [ ] Run one local trigger turn:
+
+```bash
+/usr/local/lib/cube-robot/.venv/bin/cube-robot listen --config /etc/cube-robot/robot.toml --max-turns 1
+```
+
+- [ ] Confirm silence does not trigger immediately, speaking near the microphone triggers one turn, and playback does not retrigger during cooldown.
 - [ ] Start `cube-robot.service` and confirm one spoken utterance produces playback from the assistant response.
 - [ ] Keep one fallback text utterance test available if audio capture fails, so the WebSocket path can still be validated.
 

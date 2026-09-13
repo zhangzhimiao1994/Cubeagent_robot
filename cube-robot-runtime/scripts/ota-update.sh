@@ -25,15 +25,33 @@ if [[ -z "$PYTHON_BIN" ]]; then
   if "$DRY_RUN"; then
     if [[ -x "$RUNTIME_ROOT/.venv/bin/python" ]]; then
       PYTHON_BIN="$RUNTIME_ROOT/.venv/bin/python"
+    elif [[ -x "/usr/local/lib/cube-robot/.venv/bin/python" ]]; then
+      PYTHON_BIN="/usr/local/lib/cube-robot/.venv/bin/python"
     elif command -v python3 >/dev/null 2>&1; then
       PYTHON_BIN=python3
     else
       PYTHON_BIN=python
     fi
   else
-    PYTHON_BIN="$STATE_DIR/current/bin/python"
-    if [[ ! -x "$PYTHON_BIN" ]]; then
-      printf 'current runtime Python is required: %s\n' "$PYTHON_BIN" >&2
+    for candidate in \
+      "$RUNTIME_ROOT/.venv/bin/python" \
+      "/usr/local/lib/cube-robot/.venv/bin/python" \
+      "$STATE_DIR/current/bin/python" \
+      python3 \
+      python
+    do
+      if [[ "$candidate" == */* ]]; then
+        if [[ -x "$candidate" ]]; then
+          PYTHON_BIN="$candidate"
+          break
+        fi
+      elif command -v "$candidate" >/dev/null 2>&1; then
+        PYTHON_BIN="$candidate"
+        break
+      fi
+    done
+    if [[ -z "$PYTHON_BIN" ]]; then
+      printf 'could not find a Python runtime for cube-robot OTA\n' >&2
       exit 1
     fi
   fi
@@ -42,6 +60,6 @@ fi
 arguments=(--config "$CONFIG_PATH" --state-dir "$STATE_DIR")
 if "$DRY_RUN"; then
   arguments+=(--dry-run)
-  export PYTHONPATH="$RUNTIME_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 fi
+export PYTHONPATH="$RUNTIME_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 exec "$PYTHON_BIN" -m cube_robot_runtime.ota.updater "${arguments[@]}"

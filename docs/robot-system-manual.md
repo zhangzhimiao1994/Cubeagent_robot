@@ -241,6 +241,13 @@ duration_seconds = 4.0
 # 如果有多个麦克风，先用 arecord -l 找到设备，再打开这一行。
 # device = "plughw:1,0"
 
+[listen]
+probe_duration_seconds = 0.75
+voice_threshold = 0.02
+idle_sleep_seconds = 0.2
+cooldown_seconds = 0.75
+session_id_prefix = "listen"
+
 [updates]
 channel = "stable"
 manifest_url = "http://103.236.93.62:32020/api/v1/robot/ota/manifest/pi-lab-01"
@@ -303,13 +310,34 @@ cd /usr/local/lib/cube-robot
 - `received_types` 包含 `speech.partial`、`assistant.text.done`、`tts.audio.chunk`、`tts.audio.done`
 - `played_audio_codecs` 包含 `mp3`
 
-### 5.3 安装 systemd 服务
+### 5.3 手动 listen
 
-当前 service 期望 `/var/lib/cube-robot/current/bin/cube-robot` 存在。首次安装时可以把当前 venv 链到 runtime current：
+`listen` 是树莓派常驻交互入口。它先录短探测片段，用本地 RMS 能量阈值判断是否有人声；达到阈值后触发一次完整 `voice-once`，再进入冷却，避免把机器人自己的播放声再次当成用户输入。
+
+```bash
+cd /usr/local/lib/cube-robot
+.venv/bin/cube-robot listen --config /etc/cube-robot/robot.toml --max-turns 1
+```
+
+调试时可按环境调整：
+
+```bash
+.venv/bin/cube-robot listen \
+  --config /etc/cube-robot/robot.toml \
+  --probe-duration-seconds 0.75 \
+  --voice-threshold 0.02 \
+  --cooldown-seconds 0.75
+```
+
+如果环境噪声较大，提高 `voice_threshold`；如果很难触发，降低 `voice_threshold`。`[audio].duration_seconds` 是正式对话录音长度，`[listen].probe_duration_seconds` 只是判断是否开始录音的探测长度。
+
+### 5.4 安装 systemd 服务
+
+当前 service 通过 `bash /var/lib/cube-robot/current/scripts/run-runtime.sh` 启动，避免 Windows 打包时脚本可执行位丢失导致 systemd 启动失败。首次安装时可以把当前源码目录链到 runtime current；启动脚本会优先复用 `/usr/local/lib/cube-robot/.venv` 中已安装的依赖，并把当前 release 源码加入 `PYTHONPATH`：
 
 ```bash
 sudo mkdir -p /var/lib/cube-robot/releases
-sudo ln -sfn /usr/local/lib/cube-robot/.venv /var/lib/cube-robot/current
+sudo ln -sfn /usr/local/lib/cube-robot /var/lib/cube-robot/current
 sudo cp /usr/local/lib/cube-robot/scripts/cube-robot.service /etc/systemd/system/
 sudo cp /usr/local/lib/cube-robot/scripts/cube-robot-updater.service /etc/systemd/system/
 sudo cp /usr/local/lib/cube-robot/scripts/cube-robot-updater.timer /etc/systemd/system/
@@ -325,18 +353,18 @@ systemctl status cube-robot.service --no-pager
 journalctl -u cube-robot.service -n 100 --no-pager
 ```
 
-### 5.4 日常使用
+### 5.5 日常使用
 
 正常使用时流程是：
 
 1. 树莓派启动 `cube-robot.service`。
-2. Runtime 建立到 Agent 服务端的 WebSocket。
-3. Runtime 发送 heartbeat。
-4. 用户说话后，Pi 端采集语音并发送最终语音文本或音频事件。
-5. 服务端 Agent 处理输入，结合 Hermes/Memory/认知层生成回复。
-6. Pi 端播放服务端返回的 `assistant.text.done` 或后续音频流。
+2. Runtime 进入 `listen` 循环，在本地录制短探测片段。
+3. 探测片段达到本地人声阈值后，Runtime 触发一次完整 `voice-once`。
+4. `voice-once` 建立到 Agent 服务端的 WebSocket，发送 heartbeat 和音频事件。
+5. 服务端完成 ASR、Agent/Hermes/Memory/认知层处理和 TTS。
+6. Pi 端播放服务端返回的 TTS 音频，并在冷却后回到监听。
 
-当前代码已经打通文本 dry-run、音频上传、服务端 ASR/TTS provider 边界和 `voice-once` 播放。持续监听、唤醒词、打断交互和更低延迟流式播放仍属于后续增强。
+当前代码已经打通文本 dry-run、音频上传、服务端 ASR/TTS provider、`voice-once` 播放和本地 `listen` 自动触发。唤醒词、打断交互和更低延迟流式播放仍属于后续增强。
 
 ## 6. OTA 使用
 

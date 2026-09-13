@@ -30,6 +30,7 @@ def test_pi_provisioning_assets_keep_runtime_state_outside_releases() -> None:
         root / "scripts" / "cube-robot-updater.timer",
         root / "scripts" / "first-boot-register.sh",
         root / "scripts" / "ota-update.sh",
+        root / "scripts" / "run-runtime.sh",
         root / "config" / "robot.toml.example",
     )
 
@@ -155,7 +156,7 @@ def test_robot_field_test_checklist_covers_2026_09_12_production_runbook() -> No
         assert required in text
 
 
-def test_runtime_service_entry_point_accepts_run_config(
+def test_runtime_service_entry_point_accepts_config_and_starts_listen(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -174,7 +175,21 @@ def test_runtime_service_entry_point_accepts_run_config(
     service = (root / "scripts" / "cube-robot.service").read_text(encoding="utf-8")
     exec_start = next(line for line in service.splitlines() if line.startswith("ExecStart="))
     command = shlex.split(exec_start.removeprefix("ExecStart="))
-    assert command[-3:] == ["run", "--config", "/etc/cube-robot/robot.toml"]
+    assert command[:2] == ["/usr/bin/env", "bash"]
+    assert command[2].endswith("/scripts/run-runtime.sh")
+    assert command[3:] == ["listen", "--config", "/etc/cube-robot/robot.toml"]
+
+
+def test_runtime_service_uses_source_release_launcher() -> None:
+    root = Path("cube-robot-runtime")
+    launcher = (root / "scripts" / "run-runtime.sh").read_text(encoding="utf-8")
+    updater = (root / "scripts" / "ota-update.sh").read_text(encoding="utf-8")
+
+    assert 'BOOTSTRAP_ROOT="${BOOTSTRAP_ROOT:-/usr/local/lib/cube-robot}"' in launcher
+    assert '"$BOOTSTRAP_ROOT/.venv/bin/python"' in launcher
+    assert 'export PYTHONPATH="$RUNTIME_ROOT${PYTHONPATH:+:$PYTHONPATH}"' in launcher
+    assert "exec \"$PYTHON_BIN\" -m cube_robot_runtime.main" in launcher
+    assert "/usr/local/lib/cube-robot/.venv/bin/python" in updater
 
 
 def test_runtime_voice_once_entry_point_stays_inside_pi_runtime() -> None:
