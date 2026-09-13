@@ -207,13 +207,35 @@ class MiniMaxSpeechClient:
         data = response.json()
         base_resp = data.get("base_resp") if isinstance(data, dict) else None
         if isinstance(base_resp, dict) and base_resp.get("status_code") not in (None, 0):
-            raise RuntimeError("MiniMax voice clone returned an error")
-        return {
-            "voice_id": _nested_string(data, "data", "voice_id") or voice_id,
-            "preview_audio_url": _nested_string(data, "data", "preview_audio")
+            status_msg = base_resp.get("status_msg")
+            detail = f": {status_msg}" if isinstance(status_msg, str) and status_msg else ""
+            raise RuntimeError(f"MiniMax voice clone returned an error{detail}")
+        provider_success = isinstance(base_resp, dict) and base_resp.get("status_code") in (
+            None,
+            0,
+        )
+        returned_voice_id = _nested_string(data, "data", "voice_id") or _scalar_string(
+            data, "voice_id"
+        )
+        preview_audio_url = (
+            _nested_string(data, "data", "preview_audio")
             or _nested_string(data, "data", "preview_audio_url")
-            or (data.get("demo_audio") if isinstance(data, dict) and isinstance(data.get("demo_audio"), str) else "")
-            or "",
+            or (
+                data.get("demo_audio")
+                if isinstance(data, dict) and isinstance(data.get("demo_audio"), str)
+                else ""
+            )
+            or ""
+        )
+        if not provider_success and returned_voice_id is None and not preview_audio_url:
+            payload_keys = sorted(data) if isinstance(data, dict) else []
+            suffix = f"; response keys: {payload_keys}" if payload_keys else ""
+            raise RuntimeError(
+                f"MiniMax voice clone response did not include success marker{suffix}"
+            )
+        return {
+            "voice_id": returned_voice_id or voice_id,
+            "preview_audio_url": preview_audio_url,
         }
 
     async def clone_voice_from_audio(
@@ -231,43 +253,20 @@ class MiniMaxSpeechClient:
         prompt_content_type: str | None = None,
         prompt_file_id: str | None = None,
     ) -> dict[str, str]:
-        del preview_text, prompt_text, prompt_audio, prompt_filename, prompt_content_type, prompt_file_id
-        try:
-            response = await self._http().post(
-                "/v1/voice_clone",
-                headers=self._headers(),
-                data={"model": model, "voice_id": voice_id},
-                files={"audio": (filename, audio, content_type)},
-            )
-        except httpx.RequestError as error:
-            raise ConnectionError("MiniMax voice clone unavailable") from error
-        response.raise_for_status()
-        data = response.json()
-        base_resp = data.get("base_resp") if isinstance(data, dict) else None
-        if isinstance(base_resp, dict) and base_resp.get("status_code") not in (None, 0):
-            status_msg = base_resp.get("status_msg")
-            detail = f": {status_msg}" if isinstance(status_msg, str) and status_msg else ""
-            raise RuntimeError(f"MiniMax voice clone returned an error{detail}")
-        returned_voice_id = _nested_string(data, "data", "voice_id") or _scalar_string(
-            data, "voice_id"
+        del prompt_audio, prompt_filename, prompt_content_type, prompt_file_id
+        source_file_id = await self.upload_voice_file(
+            audio,
+            filename=filename,
+            content_type=content_type,
+            purpose="voice_clone",
         )
-        if returned_voice_id is None:
-            payload_keys = sorted(data) if isinstance(data, dict) else []
-            suffix = f"; response keys: {payload_keys}" if payload_keys else ""
-            raise RuntimeError(
-                f"MiniMax voice clone response did not include voice_id{suffix}"
-            )
-        return {
-            "voice_id": returned_voice_id,
-            "preview_audio_url": _nested_string(data, "data", "preview_audio")
-            or _nested_string(data, "data", "preview_audio_url")
-            or (
-                data.get("demo_audio")
-                if isinstance(data, dict) and isinstance(data.get("demo_audio"), str)
-                else ""
-            )
-            or "",
-        }
+        return await self.clone_voice(
+            voice_id=voice_id,
+            source_file_id=source_file_id,
+            model=model,
+            preview_text=preview_text,
+            prompt_text=prompt_text,
+        )
 
     async def aclose(self) -> None:
         if self._owns_client:

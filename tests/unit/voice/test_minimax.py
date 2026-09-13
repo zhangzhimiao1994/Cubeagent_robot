@@ -113,20 +113,29 @@ async def test_minimax_synthesize_rejects_api_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_minimax_clones_voice_from_audio_with_one_step_multipart() -> None:
+async def test_minimax_clones_voice_from_audio_with_upload_then_clone() -> None:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(
-            200,
-            json={
-                "voice_id": "robot-clone",
-                "input_sensitive": False,
-                "demo_audio": "https://example.test/demo.mp3",
-                "base_resp": {"status_code": 0, "status_msg": "success"},
-            },
-        )
+        if request.url.path == "/v1/files/upload":
+            return httpx.Response(
+                200,
+                json={
+                    "file": {"file_id": "441189054001539"},
+                    "base_resp": {"status_code": 0, "status_msg": "success"},
+                },
+            )
+        if request.url.path == "/v1/voice_clone":
+            return httpx.Response(
+                200,
+                json={
+                    "input_sensitive": False,
+                    "demo_audio": "https://example.test/demo.mp3",
+                    "base_resp": {"status_code": 0, "status_msg": "success"},
+                },
+            )
+        raise AssertionError(f"unexpected path {request.url.path}")
 
     client = MiniMaxSpeechClient(
         MiniMaxSpeechConfig(api_key="secret"),
@@ -146,23 +155,36 @@ async def test_minimax_clones_voice_from_audio_with_one_step_multipart() -> None
         prompt_text="温和、自然、清晰。",
     )
 
-    assert len(requests) == 1
-    assert str(requests[0].url) == "https://api.minimaxi.com/v1/voice_clone"
+    assert len(requests) == 2
+    assert str(requests[0].url) == "https://api.minimaxi.com/v1/files/upload"
     assert requests[0].headers["authorization"] == "Bearer secret"
     assert str(requests[0].headers["content-type"]).startswith("multipart/form-data")
-    assert b'name="audio"; filename="sample.wav"' in requests[0].content
+    assert b'name="file"; filename="sample.wav"' in requests[0].content
     assert b"voice-bytes" in requests[0].content
-    assert b'name="model"' in requests[0].content
-    assert b"speech-2.8-hd" in requests[0].content
-    assert b'name="voice_id"' in requests[0].content
-    assert b"robot-clone" in requests[0].content
+    assert b'name="purpose"' in requests[0].content
+    assert b"voice_clone" in requests[0].content
+    assert str(requests[1].url) == "https://api.minimaxi.com/v1/voice_clone"
+    assert requests[1].headers["authorization"] == "Bearer secret"
+    assert requests[1].read()
+    clone_payload = json.loads(requests[1].content)
+    assert clone_payload["file_id"] == 441189054001539
+    assert clone_payload["model"] == "speech-2.8-hd"
+    assert clone_payload["voice_id"] == "robot-clone"
     assert result["voice_id"] == "robot-clone"
     assert result["preview_audio_url"] == "https://example.test/demo.mp3"
 
 
 @pytest.mark.asyncio
 async def test_minimax_clone_voice_from_audio_reports_provider_status_message() -> None:
-    def handler(_request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/files/upload":
+            return httpx.Response(
+                200,
+                json={
+                    "file_id": "441189054001539",
+                    "base_resp": {"status_code": 0, "status_msg": "success"},
+                },
+            )
         return httpx.Response(
             200,
             json={"base_resp": {"status_code": 1008, "status_msg": "insufficient balance"}},
@@ -190,7 +212,15 @@ async def test_minimax_clone_voice_from_audio_reports_provider_status_message() 
 
 @pytest.mark.asyncio
 async def test_minimax_clone_voice_from_audio_requires_success_marker() -> None:
-    def handler(_request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/files/upload":
+            return httpx.Response(
+                200,
+                json={
+                    "file_id": "441189054001539",
+                    "base_resp": {"status_code": 0, "status_msg": "success"},
+                },
+            )
         return httpx.Response(200, json={"unexpected": "shape"})
 
     client = MiniMaxSpeechClient(
@@ -201,7 +231,7 @@ async def test_minimax_clone_voice_from_audio_requires_success_marker() -> None:
         ),
     )
 
-    with pytest.raises(RuntimeError, match="response did not include voice_id"):
+    with pytest.raises(RuntimeError, match="response did not include success marker"):
         await client.clone_voice_from_audio(
             b"voice-bytes",
             voice_id="robot-clone",
