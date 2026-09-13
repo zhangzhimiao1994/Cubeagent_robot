@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 from dataclasses import dataclass
 from math import ceil
+from shlex import join
 from typing import Protocol
 
 
@@ -32,7 +33,6 @@ class CommandAudioCapture:
         duration = max(1, ceil(self.config.duration_seconds))
         command = [
             "arecord",
-            "-q",
             "-f",
             "S16_LE",
             "-r",
@@ -47,13 +47,35 @@ class CommandAudioCapture:
         ]
         if self.config.device:
             command[1:1] = ["-D", self.config.device]
-        result = subprocess.run(
-            command,
-            check=True,
-            input=b"",
-            capture_output=True,
-            timeout=duration + self.timeout_padding_seconds,
-        )
+        try:
+            result = subprocess.run(
+                command,
+                check=True,
+                input=b"",
+                capture_output=True,
+                timeout=duration + self.timeout_padding_seconds,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(_capture_error_message(exc, command)) from exc
         if not result.stdout:
             raise RuntimeError("audio capture returned no data")
         return result.stdout
+
+
+def _capture_error_message(exc: subprocess.CalledProcessError, command: list[str]) -> str:
+    stderr = _decode_output(exc.stderr)
+    stdout = _decode_output(exc.output)
+    details = stderr or stdout or "no output from arecord"
+    return (
+        f"audio capture command failed with exit code {exc.returncode}: {details}. "
+        f"Command: {join(command)}. "
+        "Check `arecord -l`, then set [audio].device such as `plughw:1,0` in /etc/cube-robot/robot.toml."
+    )
+
+
+def _decode_output(output: bytes | str | None) -> str:
+    if output is None:
+        return ""
+    if isinstance(output, str):
+        return output.strip()
+    return output.decode("utf-8", errors="replace").strip()
