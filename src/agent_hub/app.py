@@ -699,6 +699,7 @@ def create_app(
             AccessTokenService(configured.jwt_signing_key_value()) if auth_service is None else None
         )
         try:
+            configure_logging(level=configured.log_level)
             application.state.settings = configured
             application.state.trusted_proxy_ips = configured.trusted_proxy_ips
             application.state.bootstrap_tenant_id = configured.bootstrap_tenant_id

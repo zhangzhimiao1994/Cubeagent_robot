@@ -14,7 +14,7 @@ from agent_hub.domain.runs import RunStatus, TaskMode
 from agent_hub.robot.auth import RobotDeviceTokenStore
 from agent_hub.robot.protocol import RobotMessageType, build_envelope
 from agent_hub.runs.service import SubmittedRun
-from agent_hub.settings import Settings
+from agent_hub.settings import Settings, get_settings
 from agent_hub.voice.companion import RobotRunBridge
 from agent_hub.voice.gateway import create_robot_voice_router
 from agent_hub.voice.media import SpeechTranscript, SynthesizedAudio, VoiceMediaService
@@ -715,6 +715,39 @@ def test_robot_device_tokens_are_loaded_from_environment_when_settings_are_not_i
     )
 
     assert response.status_code == 200
+
+
+def test_app_lifespan_reconfigures_logging_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    levels: list[object] = []
+
+    def fake_configure_logging(*, level: object, stream: object | None = None) -> None:
+        del stream
+        levels.append(level)
+
+    monkeypatch.setenv("AGENT_HUB_LOG_LEVEL", "INFO")
+    monkeypatch.setenv("AGENT_HUB_ROBOT_DEVICE_TOKENS", "pi-lab-01:robot-token")
+    get_settings.cache_clear()
+    monkeypatch.setattr("agent_hub.app.configure_logging", fake_configure_logging)
+
+    app = create_app(
+        auth_service=StubAuthService(),
+        config_service=object(),
+        admin_resource_service=object(),
+        user_admin_service=object(),
+        run_service=FakeRobotRunService(),
+        run_repository=FakeRobotRunRepository(()),
+        rate_limiter=object(),
+        redis_probe=lambda: None,
+        database_probe=lambda: None,
+    )
+    with TestClient(app) as client:
+        assert client.get("/health/live").status_code == 200
+
+    assert levels[0] == "WARNING"
+    assert "INFO" in levels
+    get_settings.cache_clear()
 
 
 def test_robot_websocket_uses_minimax_media_provider_when_configured(
