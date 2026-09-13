@@ -203,6 +203,7 @@ describe("AppShell presentation", () => {
     const drawer = screen.getByLabelText("资源二级导航");
     expect(within(drawer).getByRole("link", { name: /模型与 API/ }).getAttribute("href")).toBe("/models");
     expect(within(drawer).getByRole("link", { name: /语音模型/ }).getAttribute("href")).toBe("/voice-models");
+    expect(within(drawer).getByRole("link", { name: /机器人 OTA/ }).getAttribute("href")).toBe("/robot-ota");
   });
 
   it("does not expose fixed navigation controls", async () => {

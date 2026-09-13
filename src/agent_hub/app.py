@@ -961,6 +961,7 @@ def create_app(
     application.state.readiness_timeout_seconds = readiness_timeout_seconds
     application.state.auth_service = auth_service
     application.state.rate_limiter = rate_limiter
+    application.state.settings = configured_settings
     application.state.config_service = config_service
     application.state.admin_resource_service = admin_resource_service
     application.state.user_admin_service = user_admin_service
@@ -1105,6 +1106,11 @@ def create_app(
             media_service_provider=lambda: getattr(
                 application.state, "robot_voice_media_service", None
             ),
+            ota_manifest_provider=lambda _device_id: _robot_ota_manifest_from_app(
+                application
+            ),
+            ota_artifact_root_provider=lambda: configured_settings.generated_artifact_dir
+            / "robot-ota",
         ).routes
     )
 
@@ -1159,6 +1165,15 @@ def _robot_voice_media_service_from_settings(
         tts_provider=client,
         responder=cast(Any, responder),
     ), client
+
+
+async def _robot_ota_manifest_from_app(application: FastAPI) -> Any:
+    service = getattr(application.state, "admin_resource_service", None)
+    getter = getattr(service, "get_settings", None)
+    if not callable(getter):
+        return None
+    settings = await getter()
+    return admin.active_robot_ota_manifest(settings.robot_ota)
 
 
 async def _robot_voice_media_service_from_admin_settings(

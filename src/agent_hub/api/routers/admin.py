@@ -78,6 +78,7 @@ from agent_hub.openclaw.remote_adapter import (
     OpenClawRemoteAdapterError,
     run_remote_openclaw_operation,
 )
+from agent_hub.robot.ota import OtaArtifact, OtaManifest
 from agent_hub.runs.repository import RunConflict, RunNotFound, RunRecord, RunRepository
 from agent_hub.runtime.contracts import JsonValue
 from agent_hub.runtime.failure_reason import is_legacy_generic_failure_reason
@@ -110,7 +111,11 @@ _OPENAI_COMPATIBLE_AUTH_HINT = (
     "API Base 是否需要带 /v1，并且 API Key 输入框只填写 token 原文，不要带 Bearer 前缀。"
 )
 _ROBOT_VOICE_ID_PATTERN = r"^[A-Za-z](?:[A-Za-z0-9_-]{6,126}[A-Za-z0-9])$"
+_ROBOT_OTA_VERSION_PATTERN = r"^\d{4}\.\d{2}\.\d{2}\+\d+$"
+_ROBOT_OTA_PROTOCOL_PATTERN = r"^[1-9]\d*$"
+_ROBOT_OTA_SHA256_PATTERN = r"^[a-f0-9]{64}$"
 _MAX_ROBOT_VOICE_CLONE_AUDIO_BYTES = 20 * 1024 * 1024
+_MAX_ROBOT_OTA_ARTIFACT_BYTES = 100 * 1024 * 1024
 _MAX_CUSTOM_ROBOT_VOICES = 64
 _MINIMAX_API_BASE_URL = "https://api.minimaxi.com"
 _LEGACY_MINIMAX_API_BASE_URLS = frozenset({"https://api.minimax.io"})
@@ -847,6 +852,55 @@ class RobotVoiceSettings(BaseModel):
         return urlunsplit((parsed.scheme, parsed.netloc, normalized_path, "", ""))
 
 
+class RobotOtaRelease(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: str = Field(min_length=1, max_length=128, pattern=_ROBOT_OTA_VERSION_PATTERN)
+    channel: str = Field(default="stable", min_length=1, max_length=32)
+    min_protocol_version: str = Field(default="1", pattern=_ROBOT_OTA_PROTOCOL_PATTERN)
+    artifact_url: str = Field(min_length=1, max_length=2048)
+    artifact_sha256: str = Field(min_length=64, max_length=64, pattern=_ROBOT_OTA_SHA256_PATTERN)
+    artifact_size_bytes: int = Field(gt=0)
+    signature: str = Field(default="sha256", min_length=1, max_length=8192)
+    rollback_version: str | None = Field(default=None, max_length=128)
+    active: bool = False
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @field_validator("artifact_url")
+    @classmethod
+    def validate_artifact_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise ValueError("OTA artifact URL must be an absolute HTTPS URL")
+        if parsed.username or parsed.password:
+            raise ValueError("OTA artifact URL must not contain credentials")
+        return value
+
+
+class RobotOtaSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    releases: list[RobotOtaRelease] = Field(default_factory=list, max_length=64)
+
+
+def active_robot_ota_manifest(settings: RobotOtaSettings) -> OtaManifest | None:
+    active = next((release for release in settings.releases if release.active), None)
+    if active is None:
+        return None
+    return OtaManifest(
+        version=active.version,
+        channel=active.channel,
+        min_protocol_version=active.min_protocol_version,
+        artifact=OtaArtifact(
+            url=active.artifact_url,
+            sha256=active.artifact_sha256,
+            size_bytes=active.artifact_size_bytes,
+        ),
+        signature=active.signature,
+        rollback_version=active.rollback_version,
+    )
+
+
 def _builtin_robot_voice_presets() -> list[RobotVoicePreset]:
     return [
         RobotVoicePreset(
@@ -911,6 +965,7 @@ class SystemSettingsRequest(BaseModel):
     attachment_retention_days: int = Field(default=7, ge=1, le=365)
     attachment_max_mb: int = Field(default=25, ge=1, le=200)
     robot_voice: RobotVoiceSettings = Field(default_factory=RobotVoiceSettings)
+    robot_ota: RobotOtaSettings = Field(default_factory=RobotOtaSettings)
 
     @field_validator("openclaw_allowed_commands")
     @classmethod
@@ -8137,6 +8192,18 @@ async def _save_robot_voice_settings(
     return _with_builtin_robot_voice_presets(saved.robot_voice)
 
 
+async def _save_robot_ota_settings(
+    ota: RobotOtaSettings,
+    *,
+    service: AdminResourceService,
+) -> RobotOtaSettings:
+    current = await service.get_settings()
+    payload = current.model_dump()
+    payload["robot_ota"] = ota
+    saved = await service.update_settings(SystemSettingsRequest.model_validate(payload))
+    return saved.robot_ota
+
+
 @router.get(
     "/robot/voice-settings",
     response_model=RobotVoiceSettings,
@@ -8245,6 +8312,127 @@ async def list_robot_voice_clone_jobs(
 ) -> list[RobotVoiceCloneJob]:
     _require(principal, "config:read")
     return list((await service.get_settings()).robot_voice.clone_jobs)
+
+
+@router.get(
+    "/robot/ota/releases",
+    response_model=list[RobotOtaRelease],
+    responses=error_responses(401, 403, 422),
+)
+async def list_robot_ota_releases(
+    principal: Annotated[AuthenticatedPrincipal, Depends(current_principal)],
+    service: Annotated[AdminResourceService, Depends(_service)],
+) -> list[RobotOtaRelease]:
+    _require(principal, "config:read")
+    return list((await service.get_settings()).robot_ota.releases)
+
+
+@router.post(
+    "/robot/ota/releases/upload",
+    response_model=RobotOtaRelease,
+    status_code=201,
+    responses=error_responses(401, 403, 422),
+)
+async def upload_robot_ota_release(
+    request: Request,
+    principal: Annotated[AuthenticatedPrincipal, Depends(current_principal)],
+    service: Annotated[AdminResourceService, Depends(_service)],
+    version: Annotated[str, Form(min_length=1, max_length=128)],
+    artifact: Annotated[UploadFile, File()],
+    channel: Annotated[str, Form(min_length=1, max_length=32)] = "stable",
+    min_protocol_version: Annotated[str, Form(pattern=_ROBOT_OTA_PROTOCOL_PATTERN)] = "1",
+    activate: Annotated[bool, Form()] = False,
+    rollback_version: Annotated[str | None, Form(max_length=128)] = None,
+) -> RobotOtaRelease:
+    _require(principal, "config:write")
+    if re.fullmatch(_ROBOT_OTA_VERSION_PATTERN, version) is None:
+        raise PublicAPIError(422, "request_validation", "request validation failed")
+    filename = safe_generated_filename(artifact.filename or "cube-robot-runtime.tar.gz")
+    if not filename.endswith((".tar.gz", ".tgz")):
+        raise PublicAPIError(422, "request_validation", "request validation failed")
+    data = await artifact.read(_MAX_ROBOT_OTA_ARTIFACT_BYTES + 1)
+    if not data or len(data) > _MAX_ROBOT_OTA_ARTIFACT_BYTES:
+        raise PublicAPIError(422, "request_validation", "request validation failed")
+    settings = getattr(request.app.state, "settings", None)
+    root = (
+        settings.generated_artifact_dir
+        if settings is not None and hasattr(settings, "generated_artifact_dir")
+        else Path("/var/lib/agent-hub/generated-artifacts")
+    )
+    output_dir = (Path(root) / "robot-ota" / version).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = (output_dir / filename).resolve()
+    if not output_path.is_relative_to(output_dir):
+        raise PublicAPIError(422, "request_validation", "request validation failed")
+    output_path.write_bytes(data)
+    digest = hashlib.sha256(data).hexdigest()
+    artifact_url = str(
+        request.url_for(
+            "download_robot_ota_artifact",
+            device_id="{device_id}",
+            version=version,
+            filename=filename,
+        )
+    )
+    parsed_artifact_url = urlsplit(artifact_url)
+    artifact_url = urlunsplit(
+        (
+            "https",
+            parsed_artifact_url.netloc,
+            parsed_artifact_url.path,
+            parsed_artifact_url.query,
+            parsed_artifact_url.fragment,
+        )
+    )
+    current = await service.get_settings()
+    next_releases = [
+        existing.model_copy(update={"active": False}) if activate else existing
+        for existing in current.robot_ota.releases
+        if existing.version != version
+    ]
+    release = RobotOtaRelease(
+        version=version,
+        channel=channel,
+        min_protocol_version=min_protocol_version,
+        artifact_url=artifact_url,
+        artifact_sha256=digest,
+        artifact_size_bytes=len(data),
+        signature=f"sha256:{digest}",
+        rollback_version=rollback_version,
+        active=activate,
+    )
+    next_releases.insert(0, release)
+    await _save_robot_ota_settings(
+        RobotOtaSettings(releases=next_releases),
+        service=service,
+    )
+    return release
+
+
+@router.post(
+    "/robot/ota/releases/{version}/activate",
+    response_model=RobotOtaRelease,
+    responses=error_responses(401, 403, 404, 422),
+)
+async def activate_robot_ota_release(
+    version: str,
+    principal: Annotated[AuthenticatedPrincipal, Depends(current_principal)],
+    service: Annotated[AdminResourceService, Depends(_service)],
+) -> RobotOtaRelease:
+    _require(principal, "config:write")
+    current = await service.get_settings()
+    selected: RobotOtaRelease | None = None
+    releases: list[RobotOtaRelease] = []
+    for release in current.robot_ota.releases:
+        active = release.version == version
+        updated = release.model_copy(update={"active": active})
+        if active:
+            selected = updated
+        releases.append(updated)
+    if selected is None:
+        raise PublicAPIError(404, "not_found", "resource not found")
+    await _save_robot_ota_settings(RobotOtaSettings(releases=releases), service=service)
+    return selected
 
 
 @router.post(

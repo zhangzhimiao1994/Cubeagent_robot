@@ -298,6 +298,23 @@ const RobotVoiceSettingsSchema = z.object({
   clone_jobs: z.array(RobotVoiceCloneJobSchema).default([]),
 });
 
+const RobotOtaReleaseSchema = z.object({
+  version: z.string(),
+  channel: z.string(),
+  min_protocol_version: z.string(),
+  artifact_url: z.string(),
+  artifact_sha256: z.string(),
+  artifact_size_bytes: z.number(),
+  signature: z.string(),
+  rollback_version: z.string().nullable().optional(),
+  active: z.boolean(),
+  created_at: z.string(),
+});
+
+const RobotOtaSettingsSchema = z.object({
+  releases: z.array(RobotOtaReleaseSchema).default([]),
+});
+
 const DEFAULT_ROBOT_VOICE_SETTINGS: z.infer<typeof RobotVoiceSettingsSchema> = {
   configured: false,
   enabled: false,
@@ -324,6 +341,10 @@ const DEFAULT_ROBOT_VOICE_SETTINGS: z.infer<typeof RobotVoiceSettingsSchema> = {
   clone_jobs: [],
 };
 
+const DEFAULT_ROBOT_OTA_SETTINGS: z.infer<typeof RobotOtaSettingsSchema> = {
+  releases: [],
+};
+
 const SystemSettingsSchema = z.object({
   default_mode: z.enum(["auto", "direct", "dispatch", "discuss", "hybrid"]),
   default_workflow_id: z.string().nullable(),
@@ -347,10 +368,12 @@ const SystemSettingsSchema = z.object({
   attachment_retention_days: z.number(),
   attachment_max_mb: z.number(),
   robot_voice: RobotVoiceSettingsSchema.default(DEFAULT_ROBOT_VOICE_SETTINGS),
+  robot_ota: RobotOtaSettingsSchema.default(DEFAULT_ROBOT_OTA_SETTINGS),
 });
 
 export type SystemSettings = z.infer<typeof SystemSettingsSchema>;
 export type RobotVoiceSettings = z.infer<typeof RobotVoiceSettingsSchema>;
+export type RobotOtaRelease = z.infer<typeof RobotOtaReleaseSchema>;
 
 export type RobotVoiceCloneUpload = {
   voice_id: string;
@@ -358,6 +381,15 @@ export type RobotVoiceCloneUpload = {
   authorization_confirmed: boolean;
   source_audio: File;
   prompt_audio?: File | null;
+};
+
+export type RobotOtaReleaseUpload = {
+  version: string;
+  channel: string;
+  min_protocol_version: string;
+  activate: boolean;
+  artifact: File;
+  rollback_version?: string | null;
 };
 
 const OpenClawOperationRequestSchema = z.object({
@@ -1617,6 +1649,34 @@ export const api = {
       "/api/v1/admin/robot/voice-clones",
       formData,
       RobotVoiceCloneJobSchema,
+    );
+  },
+  robotOtaReleases(): Promise<RobotOtaRelease[]> {
+    return request(
+      "/api/v1/admin/robot/ota/releases",
+      { method: "GET" },
+      z.array(RobotOtaReleaseSchema),
+    );
+  },
+  uploadRobotOtaRelease(payload: RobotOtaReleaseUpload): Promise<RobotOtaRelease> {
+    const formData = new FormData();
+    formData.set("version", payload.version);
+    formData.set("channel", payload.channel);
+    formData.set("min_protocol_version", payload.min_protocol_version);
+    formData.set("activate", String(payload.activate));
+    if (payload.rollback_version) formData.set("rollback_version", payload.rollback_version);
+    formData.set("artifact", payload.artifact);
+    return requestForm(
+      "/api/v1/admin/robot/ota/releases/upload",
+      formData,
+      RobotOtaReleaseSchema,
+    );
+  },
+  activateRobotOtaRelease(version: string): Promise<RobotOtaRelease> {
+    return request(
+      `/api/v1/admin/robot/ota/releases/${encodeURIComponent(version)}/activate`,
+      { method: "POST" },
+      RobotOtaReleaseSchema,
     );
   },
   createOpenClawOperationFromRun(runId: string): Promise<OpenClawOperation> {

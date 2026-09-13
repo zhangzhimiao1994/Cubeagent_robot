@@ -142,6 +142,16 @@ export const MODULE_GROUPS: ModuleGroup[] = [
           { to: "/voice-models?section=clones", label: "声音克隆", permission: "config:read" },
         ],
       },
+      {
+        to: "/robot-ota",
+        label: "机器人 OTA",
+        description: "上传树莓派运行时包、激活版本，并生成设备端可拉取的 OTA manifest。",
+        permission: "config:read",
+        children: [
+          { to: "/robot-ota?section=upload", label: "上传发布", permission: "config:read" },
+          { to: "/robot-ota?section=releases", label: "版本列表", permission: "config:read" },
+        ],
+      },
 
       {
         to: "/memory",

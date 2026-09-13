@@ -39,10 +39,13 @@ def _client(
     run_service: object | None = None,
     run_repository: object | None = None,
     admin_resource_service: object | None = None,
+    settings: Settings | None = None,
+    base_url: str = "http://testserver",
 ) -> TestClient:
     app_kwargs: dict[str, object] = {
         "auth_service": StubAuthService(),
-        "settings": Settings(robot_device_tokens=SecretStr("pi-lab-01:robot-token")),
+        "settings": settings
+        or Settings(robot_device_tokens=SecretStr("pi-lab-01:robot-token")),
     }
     if run_service is not None:
         app_kwargs["run_service"] = run_service
@@ -51,7 +54,8 @@ def _client(
     if admin_resource_service is not None:
         app_kwargs["admin_resource_service"] = admin_resource_service
     return TestClient(
-        create_app(**app_kwargs)
+        create_app(**app_kwargs),
+        base_url=base_url,
     )
 
 
@@ -494,6 +498,89 @@ def test_robot_ota_manifest_rejects_invalid_current_version_without_500() -> Non
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "request_validation"
+
+
+def test_robot_ota_upload_release_becomes_device_manifest(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    admin_service = InMemoryAdminResourceService()
+    client = _client(
+        admin_resource_service=admin_service,
+        settings=Settings(
+            robot_device_tokens=SecretStr("pi-lab-01:robot-token"),
+            generated_artifact_dir=tmp_path,
+        ),
+        base_url="https://testserver",
+    )
+
+    upload = client.post(
+        "/api/v1/admin/robot/ota/releases/upload",
+        headers=_headers(),
+        data={
+            "version": "2026.09.13+1",
+            "channel": "stable",
+            "min_protocol_version": "1",
+            "activate": "true",
+        },
+        files={"artifact": ("cube-robot-runtime.tar.gz", b"runtime-bytes", "application/gzip")},
+    )
+
+    assert upload.status_code == 201
+    release = upload.json()
+    assert release["version"] == "2026.09.13+1"
+    assert release["active"] is True
+    assert release["artifact_size_bytes"] == len(b"runtime-bytes")
+    assert release["artifact_sha256"] == (
+        "99235f1c93582c5d7f669de64945af872b90a47e628250eda09a318dcbffeec7"
+    )
+    assert release["artifact_url"].startswith(
+        "https://testserver/api/v1/robot/ota/artifacts/{device_id}/2026.09.13+1/"
+    )
+
+    manifest = client.get(
+        "/api/v1/robot/ota/manifest/pi-lab-01",
+        headers=_device_headers(),
+        params={"current_version": "2026.09.10+0", "protocol_version": "1"},
+    )
+
+    assert manifest.status_code == 200
+    body = manifest.json()
+    assert body["decision"]["status"] == "update_available"
+    assert body["manifest"]["version"] == "2026.09.13+1"
+    assert body["manifest"]["artifact"]["sha256"] == release["artifact_sha256"]
+    assert body["manifest"]["artifact"]["url"].startswith(
+        "https://testserver/api/v1/robot/ota/artifacts/pi-lab-01/2026.09.13+1/"
+    )
+
+    artifact = client.get(body["manifest"]["artifact"]["url"], headers=_device_headers())
+
+    assert artifact.status_code == 200
+    assert artifact.content == b"runtime-bytes"
+
+
+def test_robot_ota_upload_generates_https_artifact_url_from_http_console(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    admin_service = InMemoryAdminResourceService()
+    client = _client(
+        admin_resource_service=admin_service,
+        settings=Settings(
+            robot_device_tokens=SecretStr("pi-lab-01:robot-token"),
+            generated_artifact_dir=tmp_path,
+        ),
+        base_url="http://testserver",
+    )
+
+    upload = client.post(
+        "/api/v1/admin/robot/ota/releases/upload",
+        headers=_headers(),
+        data={
+            "version": "2026.09.13+2",
+            "channel": "stable",
+            "min_protocol_version": "1",
+            "activate": "true",
+        },
+        files={"artifact": ("cube-robot-runtime.tar.gz", b"runtime-bytes", "application/gzip")},
+    )
+
+    assert upload.status_code == 201
+    assert upload.json()["artifact_url"].startswith("https://testserver/")
 
 
 def test_robot_device_tokens_are_loaded_from_environment_when_settings_are_not_injected(

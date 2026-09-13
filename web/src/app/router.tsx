@@ -19,6 +19,7 @@ import { ModelsPage } from "../pages/ModelsPage";
 import { OpenClawPage } from "../pages/OpenClawPage";
 import { ModuleHubPage } from "../pages/ModuleHubPage";
 import { RunDetailPage } from "../pages/RunDetailPage";
+import { RobotOtaPage } from "../pages/RobotOtaPage";
 import { RunsPage } from "../pages/RunsPage";
 import { SchedulesPage } from "../pages/SchedulesPage";
 import { SetupPage } from "../pages/SetupPage";
@@ -58,6 +59,7 @@ export function AppRoutes() {
         <Route path="main-agent" element={<MainAgentPage />} />
         <Route path="models" element={<ModelsPage />} />
         <Route path="voice-models" element={<VoiceModelsPage />} />
+        <Route path="robot-ota" element={<RobotOtaPage />} />
         <Route path="openclaw" element={<OpenClawPage />} />
         <Route path="multimedia" element={<Navigate to="/models" replace />} />
         <Route path="attachments" element={<AttachmentsPage />} />

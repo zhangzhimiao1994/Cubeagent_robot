@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_hub.api.dependencies import require_permission
@@ -59,12 +62,17 @@ def create_robot_voice_router(
     ota_manifest: OtaManifest | None = None,
     media_service: VoiceMediaService | None = None,
     media_service_provider: Callable[[], VoiceMediaService | None] | None = None,
+    ota_manifest_provider: Callable[[str], OtaManifest | None] | None = None,
+    ota_artifact_root_provider: Callable[[], Path] | None = None,
 ) -> APIRouter:
     active_responder = responder or CompanionResponder()
     active_registry = registry or RobotSessionRegistry(responder=active_responder.respond_text)
     active_device_tokens = device_tokens or RobotDeviceTokenStore.from_secret(None)
     active_ota_manifest = ota_manifest or _default_ota_manifest()
     active_media_service = media_service
+    active_artifact_root_provider = ota_artifact_root_provider or (
+        lambda: Path("/var/lib/agent-hub/generated-artifacts/robot-ota")
+    )
     router = APIRouter(prefix="/api/v1/robot", tags=["robot"], responses=BASE_ERROR_RESPONSES)
 
     @router.get(
@@ -114,9 +122,16 @@ def create_robot_voice_router(
         protocol_version: str = "1",
     ) -> OtaManifestResponse:
         _require_device_token(active_device_tokens, device_id, token_header or token_query)
+        resolved_manifest = active_ota_manifest
+        if ota_manifest_provider is not None:
+            provided = ota_manifest_provider(device_id)
+            if inspect.isawaitable(provided):
+                provided = await provided
+            if provided is not None:
+                resolved_manifest = _manifest_for_device(provided, device_id=device_id)
         try:
             decision = validate_manifest_for_device(
-                active_ota_manifest,
+                resolved_manifest,
                 protocol_version=protocol_version,
                 current_version=current_version,
             )
@@ -128,9 +143,33 @@ def create_robot_voice_router(
                 details={"reason": str(error)},
             ) from error
         return OtaManifestResponse(
-            manifest=active_ota_manifest,
+            manifest=resolved_manifest,
             decision=decision,
         )
+
+    @router.get(
+        "/ota/artifacts/{device_id}/{version}/{filename}",
+        name="download_robot_ota_artifact",
+        response_class=FileResponse,
+        responses=error_responses(401, 404, 422),
+    )
+    async def download_ota_artifact(
+        device_id: str,
+        version: str,
+        filename: str,
+        token_header: Annotated[str | None, Header(alias="X-Robot-Device-Token")] = None,
+        token_query: Annotated[str | None, Query(alias="device_token")] = None,
+    ) -> FileResponse:
+        _require_device_token(active_device_tokens, device_id, token_header or token_query)
+        if "/" in version or "\\" in version or ".." in version:
+            raise PublicAPIError(422, "request_validation", "request validation failed")
+        if "/" in filename or "\\" in filename or filename in {"", ".", ".."}:
+            raise PublicAPIError(422, "request_validation", "request validation failed")
+        root = active_artifact_root_provider().resolve()
+        target = (root / version / filename).resolve()
+        if not target.is_relative_to(root) or not target.is_file():
+            raise PublicAPIError(404, "not_found", "resource not found")
+        return FileResponse(target, filename=filename, media_type="application/gzip")
 
     @router.websocket("/ws/{device_id}")
     async def robot_websocket(websocket: WebSocket, device_id: str) -> None:
@@ -172,6 +211,17 @@ def _require_device_token(
 ) -> None:
     if not tokens.authenticate(device_id, provided_token):
         raise PublicAPIError(401, "invalid_robot_device_token", "invalid robot device token")
+
+
+def _manifest_for_device(manifest: OtaManifest, *, device_id: str) -> OtaManifest:
+    artifact_url = manifest.artifact.url.replace("{device_id}", device_id)
+    if artifact_url == manifest.artifact.url:
+        return manifest
+    return manifest.model_copy(
+        update={
+            "artifact": manifest.artifact.model_copy(update={"url": artifact_url}),
+        }
+    )
 
 
 def _websocket_device_token_valid(

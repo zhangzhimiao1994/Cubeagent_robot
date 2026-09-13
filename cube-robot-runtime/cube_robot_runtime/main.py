@@ -13,6 +13,7 @@ from cube_robot_runtime.audio.capture import AudioCaptureConfig, CommandAudioCap
 from cube_robot_runtime.audio.playback import CommandAudioPlayback, PlaybackRecorder
 from cube_robot_runtime.device.identity import DeviceIdentity
 from cube_robot_runtime.network.client import open_connection
+from cube_robot_runtime.ota.updater import apply_update, check_for_update
 from cube_robot_runtime.protocol.messages import RobotEnvelope
 from cube_robot_runtime.voice_once import VoiceOnceConfig, run_voice_once
 
@@ -146,6 +147,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     voice_once.add_argument("--config", type=Path, required=True)
     voice_once.add_argument("--session-id", default="voice-once-session")
     voice_once.add_argument("--player")
+    ota_check = subcommands.add_parser("ota-check")
+    ota_check.add_argument("--config", type=Path, required=True)
+    ota_check.add_argument("--state-dir", type=Path, default=Path("/var/lib/cube-robot"))
+    ota_check.add_argument("--current-version", required=True)
+    ota_check.add_argument("--protocol-version", default="1")
+    ota_check.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
     if args.command == "run":
         config = load_runtime_config(args.config)
@@ -177,6 +184,35 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "received_types": result.received_types,
                     "received_texts": result.received_texts,
                     "played_audio_codecs": result.played_audio_codecs,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    if args.command == "ota-check":
+        config = load_runtime_config(args.config)
+        check = check_for_update(
+            config.server_url,
+            device_id=config.device_id,
+            device_token=config.device_token,
+            current_version=args.current_version,
+            protocol_version=args.protocol_version,
+        )
+        status = "update_available" if check.update_available else "up_to_date"
+        if args.apply and check.update_available and check.manifest is not None:
+            apply_update(
+                check.manifest,
+                state_dir=args.state_dir,
+                device_token=config.device_token,
+                token_hosts=check.token_hosts,
+            )
+            status = "applied"
+        print(
+            json.dumps(
+                {
+                    "status": status,
+                    "target_version": check.manifest.version if check.manifest else None,
+                    "reason": check.reason,
                 },
                 ensure_ascii=False,
             )
