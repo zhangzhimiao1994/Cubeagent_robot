@@ -92,6 +92,11 @@ from agent_hub.multimodal.video_providers import TextToVideoProvider, TextToVide
 from agent_hub.observability.logging import configure_logging
 from agent_hub.observability.metrics import default_metrics_registry
 from agent_hub.robot.auth import RobotDeviceTokenStore
+from agent_hub.robot.management import (
+    RobotDeviceConfig,
+    RobotDevicePolicy,
+    RobotDevicePolicyBundle,
+)
 from agent_hub.robot.session import RobotSessionRegistry
 from agent_hub.routing.classifier import GatewayRouteClassifier
 from agent_hub.routing.service import ModeRouter, RoutingPolicy
@@ -1109,8 +1114,13 @@ def create_app(
             media_service_provider=lambda: getattr(
                 application.state, "robot_voice_media_service", None
             ),
-            ota_manifest_provider=lambda _device_id: _robot_ota_manifest_from_app(
-                application
+            ota_manifest_provider=lambda device_id: _robot_ota_manifest_from_app(
+                application,
+                device_id,
+            ),
+            policy_provider=lambda device_id: _robot_policy_from_app(
+                application,
+                device_id,
             ),
             ota_artifact_root_provider=lambda: configured_settings.generated_artifact_dir
             / "robot-ota",
@@ -1173,13 +1183,39 @@ def _robot_voice_media_service_from_settings(
     ), client
 
 
-async def _robot_ota_manifest_from_app(application: FastAPI) -> Any:
+async def _robot_ota_manifest_from_app(application: FastAPI, device_id: str) -> Any:
     service = getattr(application.state, "admin_resource_service", None)
     getter = getattr(service, "get_settings", None)
     if not callable(getter):
         return None
     settings = await getter()
-    return admin.active_robot_ota_manifest(settings.robot_ota)
+    return admin.robot_ota_manifest_for_device(
+        settings.robot_ota,
+        settings.robot_fleet,
+        device_id=device_id,
+    )
+
+
+async def _robot_policy_from_app(
+    application: FastAPI,
+    device_id: str,
+) -> RobotDevicePolicyBundle | None:
+    service = getattr(application.state, "admin_resource_service", None)
+    getter = getattr(service, "get_settings", None)
+    if not callable(getter):
+        return None
+    settings = await getter()
+    record = next(
+        (device for device in settings.robot_fleet.devices if device.device_id == device_id),
+        None,
+    )
+    return RobotDevicePolicyBundle(
+        device_id=device_id,
+        config=record.config if record is not None else RobotDeviceConfig(),
+        policy=record.policy if record is not None else RobotDevicePolicy(),
+        target_version=record.target_version if record is not None else None,
+        policy_version=record.updated_at.isoformat() if record is not None else "default",
+    )
 
 
 async def _robot_voice_media_service_from_admin_settings(

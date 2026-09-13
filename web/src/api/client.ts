@@ -313,6 +313,47 @@ const RobotOtaReleaseSchema = z.object({
   created_at: z.string(),
 });
 
+const RobotDeviceConfigSchema = z.object({
+  display_name: z.string().default(""),
+  locale: z.string().default("zh-CN"),
+  voice_preset_id: z.string().nullable().default(null),
+  volume: z.number().default(70),
+  wake_word_required: z.boolean().default(true),
+});
+
+const RobotDevicePolicySchema = z.object({
+  ota_channel: z.string().default("stable"),
+  auto_update: z.boolean().default(true),
+  maintenance_window: z.string().default("03:00-05:00"),
+  telemetry_enabled: z.boolean().default(true),
+});
+
+const DEFAULT_ROBOT_DEVICE_CONFIG: z.infer<typeof RobotDeviceConfigSchema> = {
+  display_name: "",
+  locale: "zh-CN",
+  voice_preset_id: null,
+  volume: 70,
+  wake_word_required: true,
+};
+
+const DEFAULT_ROBOT_DEVICE_POLICY: z.infer<typeof RobotDevicePolicySchema> = {
+  ota_channel: "stable",
+  auto_update: true,
+  maintenance_window: "03:00-05:00",
+  telemetry_enabled: true,
+};
+
+const RobotDeviceSchema = z.object({
+  device_id: z.string(),
+  name: z.string().default(""),
+  status: z.string().default("unknown"),
+  current_version: z.string().nullable().default(null),
+  target_version: z.string().nullable().default(null),
+  last_seen_at: z.string().nullable().default(null),
+  config: RobotDeviceConfigSchema.default(DEFAULT_ROBOT_DEVICE_CONFIG),
+  policy: RobotDevicePolicySchema.default(DEFAULT_ROBOT_DEVICE_POLICY),
+});
+
 const RobotOtaSettingsSchema = z.object({
   releases: z.array(RobotOtaReleaseSchema).default([]),
 });
@@ -378,6 +419,9 @@ const SystemSettingsSchema = z.object({
 export type SystemSettings = z.infer<typeof SystemSettingsSchema>;
 export type RobotVoiceSettings = z.infer<typeof RobotVoiceSettingsSchema>;
 export type RobotOtaRelease = z.infer<typeof RobotOtaReleaseSchema>;
+export type RobotDeviceConfig = z.infer<typeof RobotDeviceConfigSchema>;
+export type RobotDevicePolicy = z.infer<typeof RobotDevicePolicySchema>;
+export type RobotDevice = z.infer<typeof RobotDeviceSchema>;
 
 export type RobotVoiceCloneUpload = {
   voice_id: string;
@@ -394,6 +438,10 @@ export type RobotOtaReleaseUpload = {
   activate: boolean;
   artifact: File;
   rollback_version?: string | null;
+};
+
+export type RobotOtaTargetUpdate = {
+  version: string | null;
 };
 
 const OpenClawOperationRequestSchema = z.object({
@@ -1681,6 +1729,34 @@ export const api = {
       `/api/v1/admin/robot/ota/releases/${encodeURIComponent(version)}/activate`,
       { method: "POST" },
       RobotOtaReleaseSchema,
+    );
+  },
+  robotDevices(): Promise<RobotDevice[]> {
+    return request(
+      "/api/v1/admin/robot/devices",
+      { method: "GET" },
+      z.array(RobotDeviceSchema),
+    );
+  },
+  updateRobotDeviceConfig(deviceId: string, payload: RobotDeviceConfig): Promise<RobotDevice> {
+    return request(
+      `/api/v1/admin/robot/devices/${encodeURIComponent(deviceId)}/config`,
+      { method: "PUT", body: JSON.stringify(payload) },
+      RobotDeviceSchema,
+    );
+  },
+  updateRobotDevicePolicy(deviceId: string, payload: RobotDevicePolicy): Promise<RobotDevice> {
+    return request(
+      `/api/v1/admin/robot/devices/${encodeURIComponent(deviceId)}/policy`,
+      { method: "PUT", body: JSON.stringify(payload) },
+      RobotDeviceSchema,
+    );
+  },
+  updateRobotDeviceOtaTarget(deviceId: string, payload: RobotOtaTargetUpdate): Promise<RobotDevice> {
+    return request(
+      `/api/v1/admin/robot/devices/${encodeURIComponent(deviceId)}/ota-target`,
+      { method: "POST", body: JSON.stringify(payload) },
+      RobotDeviceSchema,
     );
   },
   createOpenClawOperationFromRun(runId: string): Promise<OpenClawOperation> {

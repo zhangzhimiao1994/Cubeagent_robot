@@ -78,6 +78,14 @@ from agent_hub.openclaw.remote_adapter import (
     OpenClawRemoteAdapterError,
     run_remote_openclaw_operation,
 )
+from agent_hub.robot.management import (
+    RobotDeviceConfig,
+    RobotDevicePolicy,
+    RobotDeviceRecord,
+    RobotFleetSettings,
+    RobotManagedDevice,
+    RobotOtaTargetUpdate,
+)
 from agent_hub.robot.ota import OtaArtifact, OtaManifest
 from agent_hub.runs.repository import RunConflict, RunNotFound, RunRecord, RunRepository
 from agent_hub.runtime.contracts import JsonValue
@@ -905,6 +913,37 @@ class RobotOtaSettings(BaseModel):
 
 def active_robot_ota_manifest(settings: RobotOtaSettings) -> OtaManifest | None:
     active = next((release for release in settings.releases if release.active), None)
+    return _robot_ota_release_manifest(active)
+
+
+def robot_ota_manifest_for_device(
+    ota: RobotOtaSettings,
+    fleet: RobotFleetSettings,
+    *,
+    device_id: str,
+) -> OtaManifest | None:
+    device = _robot_device_record(fleet, device_id)
+    if device is not None and device.target_version:
+        targeted = next(
+            (release for release in ota.releases if release.version == device.target_version),
+            None,
+        )
+        return _robot_ota_release_manifest(targeted)
+    if device is not None and device.policy.auto_update:
+        channel_active = next(
+            (
+                release
+                for release in ota.releases
+                if release.active and release.channel == device.policy.ota_channel
+            ),
+            None,
+        )
+        if channel_active is not None:
+            return _robot_ota_release_manifest(channel_active)
+    return active_robot_ota_manifest(ota)
+
+
+def _robot_ota_release_manifest(active: RobotOtaRelease | None) -> OtaManifest | None:
     if active is None:
         return None
     return OtaManifest(
@@ -986,6 +1025,7 @@ class SystemSettingsRequest(BaseModel):
     attachment_max_mb: int = Field(default=25, ge=1, le=200)
     robot_voice: RobotVoiceSettings = Field(default_factory=RobotVoiceSettings)
     robot_ota: RobotOtaSettings = Field(default_factory=RobotOtaSettings)
+    robot_fleet: RobotFleetSettings = Field(default_factory=RobotFleetSettings)
 
     @field_validator("openclaw_allowed_commands")
     @classmethod
@@ -8226,6 +8266,95 @@ async def _save_robot_ota_settings(
     return saved.robot_ota
 
 
+async def _save_robot_fleet_settings(
+    fleet: RobotFleetSettings,
+    *,
+    service: AdminResourceService,
+) -> RobotFleetSettings:
+    current = await service.get_settings()
+    payload = current.model_dump()
+    payload["robot_fleet"] = fleet
+    saved = await service.update_settings(SystemSettingsRequest.model_validate(payload))
+    return saved.robot_fleet
+
+
+def _robot_device_record(
+    fleet: RobotFleetSettings,
+    device_id: str,
+) -> RobotDeviceRecord | None:
+    return next((device for device in fleet.devices if device.device_id == device_id), None)
+
+
+def _upsert_robot_device_record(
+    fleet: RobotFleetSettings,
+    record: RobotDeviceRecord,
+) -> RobotFleetSettings:
+    records = [device for device in fleet.devices if device.device_id != record.device_id]
+    records.insert(0, record)
+    return RobotFleetSettings(devices=records)
+
+
+def _robot_device_statuses(request: Request) -> dict[str, Any]:
+    registry = getattr(request.app.state, "robot_session_registry", None)
+    status = getattr(registry, "status", None)
+    if not callable(status):
+        return {}
+    snapshot = status(None)
+    return {device.device_id: device for device in snapshot.devices}
+
+
+def _robot_managed_device(
+    device_id: str,
+    *,
+    record: RobotDeviceRecord | None,
+    runtime_status: Any | None,
+) -> RobotManagedDevice:
+    config = record.config if record is not None else RobotDeviceConfig()
+    policy = record.policy if record is not None else RobotDevicePolicy()
+    return RobotManagedDevice(
+        device_id=device_id,
+        name=config.display_name,
+        status="online" if runtime_status is not None else "offline",
+        current_version=getattr(runtime_status, "runtime_version", None),
+        target_version=record.target_version if record is not None else None,
+        last_seen_at=getattr(runtime_status, "last_seen_at", None),
+        config=config,
+        policy=policy,
+    )
+
+
+async def _robot_managed_devices(
+    *,
+    request: Request,
+    service: AdminResourceService,
+) -> list[RobotManagedDevice]:
+    settings = await service.get_settings()
+    statuses = _robot_device_statuses(request)
+    records = {device.device_id: device for device in settings.robot_fleet.devices}
+    device_ids = sorted(set(records) | set(statuses))
+    return [
+        _robot_managed_device(
+            device_id,
+            record=records.get(device_id),
+            runtime_status=statuses.get(device_id),
+        )
+        for device_id in device_ids
+    ]
+
+
+async def _robot_managed_device_response(
+    device_id: str,
+    *,
+    request: Request,
+    service: AdminResourceService,
+) -> RobotManagedDevice:
+    devices = await _robot_managed_devices(request=request, service=service)
+    for device in devices:
+        if device.device_id == device_id:
+            return device
+    return _robot_managed_device(device_id, record=None, runtime_status=None)
+
+
 @router.get(
     "/robot/voice-settings",
     response_model=RobotVoiceSettings,
@@ -8334,6 +8463,105 @@ async def list_robot_voice_clone_jobs(
 ) -> list[RobotVoiceCloneJob]:
     _require(principal, "config:read")
     return list((await service.get_settings()).robot_voice.clone_jobs)
+
+
+@router.get(
+    "/robot/devices",
+    response_model=list[RobotManagedDevice],
+    responses=error_responses(401, 403, 422),
+)
+async def list_robot_devices(
+    request: Request,
+    principal: Annotated[AuthenticatedPrincipal, Depends(current_principal)],
+    service: Annotated[AdminResourceService, Depends(_service)],
+) -> list[RobotManagedDevice]:
+    _require(principal, "config:read")
+    return await _robot_managed_devices(request=request, service=service)
+
+
+@router.put(
+    "/robot/devices/{device_id}/config",
+    response_model=RobotManagedDevice,
+    responses=error_responses(401, 403, 422),
+)
+async def update_robot_device_config(
+    device_id: str,
+    body: RobotDeviceConfig,
+    request: Request,
+    principal: Annotated[AuthenticatedPrincipal, Depends(current_principal)],
+    service: Annotated[AdminResourceService, Depends(_service)],
+) -> RobotManagedDevice:
+    _require(principal, "config:write")
+    current = await service.get_settings()
+    record = _robot_device_record(current.robot_fleet, device_id) or RobotDeviceRecord(
+        device_id=device_id
+    )
+    await _save_robot_fleet_settings(
+        _upsert_robot_device_record(
+            current.robot_fleet,
+            record.model_copy(update={"config": body, "updated_at": datetime.now(UTC)}),
+        ),
+        service=service,
+    )
+    return await _robot_managed_device_response(device_id, request=request, service=service)
+
+
+@router.put(
+    "/robot/devices/{device_id}/policy",
+    response_model=RobotManagedDevice,
+    responses=error_responses(401, 403, 422),
+)
+async def update_robot_device_policy(
+    device_id: str,
+    body: RobotDevicePolicy,
+    request: Request,
+    principal: Annotated[AuthenticatedPrincipal, Depends(current_principal)],
+    service: Annotated[AdminResourceService, Depends(_service)],
+) -> RobotManagedDevice:
+    _require(principal, "config:write")
+    current = await service.get_settings()
+    record = _robot_device_record(current.robot_fleet, device_id) or RobotDeviceRecord(
+        device_id=device_id
+    )
+    await _save_robot_fleet_settings(
+        _upsert_robot_device_record(
+            current.robot_fleet,
+            record.model_copy(update={"policy": body, "updated_at": datetime.now(UTC)}),
+        ),
+        service=service,
+    )
+    return await _robot_managed_device_response(device_id, request=request, service=service)
+
+
+@router.post(
+    "/robot/devices/{device_id}/ota-target",
+    response_model=RobotManagedDevice,
+    responses=error_responses(401, 403, 422),
+)
+async def update_robot_device_ota_target(
+    device_id: str,
+    body: RobotOtaTargetUpdate,
+    request: Request,
+    principal: Annotated[AuthenticatedPrincipal, Depends(current_principal)],
+    service: Annotated[AdminResourceService, Depends(_service)],
+) -> RobotManagedDevice:
+    _require(principal, "config:write")
+    current = await service.get_settings()
+    if body.version is not None and body.version not in {
+        release.version for release in current.robot_ota.releases
+    }:
+        raise PublicAPIError(422, "request_validation", "OTA target version is not published")
+    record = _robot_device_record(current.robot_fleet, device_id) or RobotDeviceRecord(
+        device_id=device_id
+    )
+    await _save_robot_fleet_settings(
+        _upsert_robot_device_record(
+            current.robot_fleet,
+            record.model_copy(update={"target_version": body.version, "updated_at": datetime.now(UTC)}),
+        ),
+        service=service,
+    )
+    return await _robot_managed_device_response(device_id, request=request, service=service)
 
 
 @router.get(

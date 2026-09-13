@@ -30,6 +30,13 @@ python tools/robot_voice_probe.py --base-url http://103.236.93.62:32020 --device
 
 ## OTA Dry-Run
 
+- [ ] Confirm the Pi can fetch the server-managed policy:
+
+```bash
+/usr/local/lib/cube-robot/.venv/bin/cube-robot policy-check --config /etc/cube-robot/robot.toml
+```
+
+- [ ] Confirm the policy output includes `policy_version`, `config`, `policy`, and the expected `target_version` when one is set from the Web console.
 - [ ] Run OTA dry-run before any release switch:
 
 ```bash

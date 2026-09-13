@@ -788,6 +788,103 @@ def test_robot_ota_upload_generates_https_artifact_url_from_http_console(tmp_pat
     assert upload.json()["artifact_url"].startswith("https://testserver/")
 
 
+def test_robot_device_admin_config_policy_and_ota_target_feed_device_policy(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    admin_service = InMemoryAdminResourceService()
+    client = _client(
+        admin_resource_service=admin_service,
+        settings=Settings(
+            robot_device_tokens=SecretStr("pi-lab-01:robot-token"),
+            generated_artifact_dir=tmp_path,
+        ),
+        base_url="https://testserver",
+    )
+
+    upload = client.post(
+        "/api/v1/admin/robot/ota/releases/upload",
+        headers=_headers(),
+        data={
+            "version": "2026.09.14+1",
+            "channel": "stable",
+            "min_protocol_version": "1",
+            "activate": "true",
+        },
+        files={"artifact": ("cube-robot-runtime.tar.gz", b"runtime-bytes", "application/gzip")},
+    )
+    assert upload.status_code == 201
+
+    config = client.put(
+        "/api/v1/admin/robot/devices/pi-lab-01/config",
+        headers=_headers(),
+        json={
+            "display_name": "实验室树莓派",
+            "locale": "zh-CN",
+            "voice_preset_id": "warm",
+            "volume": 55,
+            "wake_word_required": True,
+        },
+    )
+    policy = client.put(
+        "/api/v1/admin/robot/devices/pi-lab-01/policy",
+        headers=_headers(),
+        json={
+            "ota_channel": "stable",
+            "auto_update": True,
+            "maintenance_window": "02:00-04:00",
+            "telemetry_enabled": True,
+        },
+    )
+    target = client.post(
+        "/api/v1/admin/robot/devices/pi-lab-01/ota-target",
+        headers=_headers(),
+        json={"version": "2026.09.14+1"},
+    )
+
+    assert config.status_code == 200
+    assert config.json()["status"] == "offline"
+    assert config.json()["config"]["display_name"] == "实验室树莓派"
+    assert policy.status_code == 200
+    assert policy.json()["policy"]["maintenance_window"] == "02:00-04:00"
+    assert target.status_code == 200
+    assert target.json()["target_version"] == "2026.09.14+1"
+
+    devices = client.get("/api/v1/admin/robot/devices", headers=_headers())
+    assert devices.status_code == 200
+    assert devices.json()[0]["device_id"] == "pi-lab-01"
+    assert devices.json()[0]["name"] == "实验室树莓派"
+
+    device_policy = client.get(
+        "/api/v1/robot/policy/pi-lab-01",
+        headers=_device_headers(),
+    )
+    assert device_policy.status_code == 200
+    assert device_policy.json()["config"]["volume"] == 55
+    assert device_policy.json()["policy"]["ota_channel"] == "stable"
+    assert device_policy.json()["target_version"] == "2026.09.14+1"
+    assert device_policy.json()["policy_version"] != "default"
+
+    manifest = client.get(
+        "/api/v1/robot/ota/manifest/pi-lab-01",
+        headers=_device_headers(),
+        params={"current_version": "2026.09.10+0", "protocol_version": "1"},
+    )
+    assert manifest.status_code == 200
+    assert manifest.json()["manifest"]["version"] == "2026.09.14+1"
+
+
+def test_robot_device_ota_target_rejects_unpublished_version() -> None:
+    admin_service = InMemoryAdminResourceService()
+    client = _client(admin_resource_service=admin_service)
+
+    response = client.post(
+        "/api/v1/admin/robot/devices/pi-lab-01/ota-target",
+        headers=_headers(),
+        json={"version": "2026.09.99+1"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "request_validation"
+
+
 def test_robot_device_tokens_are_loaded_from_environment_when_settings_are_not_injected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

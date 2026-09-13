@@ -15,6 +15,7 @@ from cube_robot_runtime.device.identity import DeviceIdentity
 from cube_robot_runtime.listen import ListenConfig, run_listen_loop
 from cube_robot_runtime.network.client import open_connection
 from cube_robot_runtime.ota.updater import apply_update, check_for_update
+from cube_robot_runtime.policy import fetch_device_policy
 from cube_robot_runtime.protocol.messages import RobotEnvelope
 from cube_robot_runtime.voice_once import VoiceOnceConfig, VoiceOnceResult, run_voice_once
 
@@ -180,6 +181,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     ota_check.add_argument("--current-version", required=True)
     ota_check.add_argument("--protocol-version", default="1")
     ota_check.add_argument("--apply", action="store_true")
+    policy_check = subcommands.add_parser("policy-check")
+    policy_check.add_argument("--config", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.command == "run":
         config = load_runtime_config(args.config)
@@ -290,6 +293,26 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "status": status,
                     "target_version": check.manifest.version if check.manifest else None,
                     "reason": check.reason,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    if args.command == "policy-check":
+        config = load_runtime_config(args.config)
+        policy = fetch_device_policy(
+            config.server_url,
+            device_id=config.device_id,
+            device_token=config.device_token,
+        )
+        print(
+            json.dumps(
+                {
+                    "device_id": policy.device_id,
+                    "policy_version": policy.policy_version,
+                    "target_version": policy.target_version,
+                    "config": policy.config,
+                    "policy": policy.policy,
                 },
                 ensure_ascii=False,
             )

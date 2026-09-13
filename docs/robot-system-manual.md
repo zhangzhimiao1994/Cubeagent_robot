@@ -364,7 +364,28 @@ journalctl -u cube-robot.service -n 100 --no-pager
 5. 服务端完成 ASR、Agent/Hermes/Memory/认知层处理和 TTS。
 6. Pi 端播放服务端返回的 TTS 音频，并在冷却后回到监听。
 
-当前代码已经打通文本 dry-run、音频上传、服务端 ASR/TTS provider、`voice-once` 播放和本地 `listen` 自动触发。唤醒词、打断交互和更低延迟流式播放仍属于后续增强。
+当前代码已经打通文本 dry-run、音频上传、服务端 ASR/TTS provider、`voice-once` 播放、本地 `listen` 自动触发和服务端唤醒词过滤。打断交互和更低延迟流式播放仍属于后续增强。
+
+### 5.6 策略下发检查
+
+Agent 服务端的控制台提供“机器人管理”模块，可以查看树莓派设备、保存设备配置、设置设备策略和指定 OTA 目标版本。树莓派不是大脑，只拉取并执行服务端下发的低风险运行策略。
+
+在树莓派上检查当前策略：
+
+```bash
+cd /usr/local/lib/cube-robot
+.venv/bin/cube-robot policy-check --config /etc/cube-robot/robot.toml
+```
+
+预期输出包含：
+
+- `device_id`
+- `policy_version`
+- `target_version`
+- `config`
+- `policy`
+
+如果返回 401，优先检查 `/etc/cube-robot/robot.toml` 里的 `device_token` 是否与服务端设备 token 一致。
 
 ## 6. OTA 使用
 

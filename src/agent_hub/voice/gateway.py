@@ -13,6 +13,11 @@ from agent_hub.api.dependencies import require_permission
 from agent_hub.api.errors import BASE_ERROR_RESPONSES, PublicAPIError, error_responses
 from agent_hub.auth.models import AuthenticatedPrincipal
 from agent_hub.robot.auth import RobotDeviceTokenStore
+from agent_hub.robot.management import (
+    RobotDeviceConfig,
+    RobotDevicePolicy,
+    RobotDevicePolicyBundle,
+)
 from agent_hub.robot.ota import OtaArtifact, OtaDecision, OtaManifest, validate_manifest_for_device
 from agent_hub.robot.protocol import RobotEnvelope, RobotMessageType, build_envelope
 from agent_hub.robot.session import RobotSessionRegistry, RobotStatusSnapshot
@@ -63,6 +68,7 @@ def create_robot_voice_router(
     media_service: VoiceMediaService | None = None,
     media_service_provider: Callable[[], VoiceMediaService | None] | None = None,
     ota_manifest_provider: Callable[[str], OtaManifest | None] | None = None,
+    policy_provider: Callable[[str], RobotDevicePolicyBundle | None] | None = None,
     ota_artifact_root_provider: Callable[[], Path] | None = None,
 ) -> APIRouter:
     active_responder = responder or CompanionResponder()
@@ -146,6 +152,38 @@ def create_robot_voice_router(
             manifest=resolved_manifest,
             decision=decision,
         )
+
+    @router.get(
+        "/policy/{device_id}",
+        response_model=RobotDevicePolicyBundle,
+        responses=error_responses(401, 422),
+    )
+    async def get_device_policy(
+        device_id: str,
+        token_header: Annotated[str | None, Header(alias="X-Robot-Device-Token")] = None,
+        token_query: Annotated[str | None, Query(alias="device_token")] = None,
+    ) -> RobotDevicePolicyBundle:
+        _require_device_token(active_device_tokens, device_id, token_header or token_query)
+        if policy_provider is None:
+            return RobotDevicePolicyBundle(
+                device_id=device_id,
+                config=RobotDeviceConfig(),
+                policy=RobotDevicePolicy(),
+                target_version=None,
+                policy_version="default",
+            )
+        provided = policy_provider(device_id)
+        if inspect.isawaitable(provided):
+            provided = await provided
+        if provided is None:
+            return RobotDevicePolicyBundle(
+                device_id=device_id,
+                config=RobotDeviceConfig(),
+                policy=RobotDevicePolicy(),
+                target_version=None,
+                policy_version="default",
+            )
+        return provided
 
     @router.get(
         "/ota/artifacts/{device_id}/{version}/{filename}",

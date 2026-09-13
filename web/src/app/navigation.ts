@@ -144,10 +144,14 @@ export const MODULE_GROUPS: ModuleGroup[] = [
       },
       {
         to: "/robot-ota",
-        label: "机器人 OTA",
-        description: "上传树莓派运行时包、激活版本，并生成设备端可拉取的 OTA manifest。",
+        label: "机器人管理",
+        description: "管理树莓派机器人设备、配置、策略和设备端可拉取的 OTA manifest。",
         permission: "config:read",
         children: [
+          { to: "/robot-ota?section=devices", label: "设备列表", permission: "config:read" },
+          { to: "/robot-ota?section=config", label: "设备配置", permission: "config:read" },
+          { to: "/robot-ota?section=policy", label: "设备策略", permission: "config:read" },
+          { to: "/robot-ota?section=ota-target", label: "目标版本", permission: "config:read" },
           { to: "/robot-ota?section=upload", label: "上传发布", permission: "config:read" },
           { to: "/robot-ota?section=releases", label: "版本列表", permission: "config:read" },
         ],
