@@ -142,7 +142,7 @@ class RobotRunBridge:
                 tenant_id=self._tenant_id,
                 actor_id=self._actor_id,
                 message=utterance,
-                mode=TaskMode.AUTO,
+                mode=TaskMode.DIRECT,
                 conversation_id=conversation_id,
                 channel_context=channel_context,
                 idempotency_key=idempotency_key,

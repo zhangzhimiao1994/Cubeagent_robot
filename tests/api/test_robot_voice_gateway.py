@@ -334,7 +334,7 @@ def test_robot_websocket_bridges_final_speech_to_agent_run_artifact() -> None:
     response = _final_speech_response(client)
 
     submitted = run_service.submitted
-    assert submitted["mode"].value == "auto"
+    assert submitted["mode"].value == "direct"
     assert submitted["conversation_id"] == "robot-pi-lab-01-voice-session-1"
     assert submitted["channel_context"]["source_channel"] == "robot_voice"
     assert submitted["channel_context"]["requested_channel_features"] == "voice,audio,robot"
