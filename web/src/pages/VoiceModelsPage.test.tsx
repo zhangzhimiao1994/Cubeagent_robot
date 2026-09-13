@@ -64,6 +64,8 @@ type VoiceSettingsFixture = {
   clone_preview_text: string;
   clone_prompt_text: string | null;
   clone_jobs: VoiceCloneJobFixture[];
+  wake_word_required: boolean;
+  wake_words: string[];
 };
 
 const voiceSettings: VoiceSettingsFixture = {
@@ -115,6 +117,8 @@ const voiceSettings: VoiceSettingsFixture = {
   clone_preview_text: "你好，我是你的语音机器人。",
   clone_prompt_text: null,
   clone_jobs: [],
+  wake_word_required: false,
+  wake_words: [],
 };
 
 function jsonResponse(payload: unknown, init: ResponseInit = {}) {
@@ -237,6 +241,8 @@ describe("VoiceModelsPage", () => {
     await user.selectOptions(screen.getByLabelText("TTS 模型"), "speech-2.8-hd");
     await user.selectOptions(screen.getByLabelText("默认音色"), "Chinese (Mandarin)_Warm_Girl");
     await user.click(screen.getByLabelText("允许控制台发起声音克隆"));
+    await user.click(screen.getByLabelText("必须命中唤醒词才触发 Agent"));
+    await user.type(screen.getByLabelText("唤醒词"), "小立方,你好立方");
     await user.click(screen.getByRole("button", { name: "保存语音模型配置" }));
 
     await waitFor(() => {
@@ -250,6 +256,8 @@ describe("VoiceModelsPage", () => {
           minimax_tts_voice_id: "Chinese (Mandarin)_Warm_Girl",
           default_voice_id: "Chinese (Mandarin)_Warm_Girl",
           clone_enabled: true,
+          wake_word_required: true,
+          wake_words: ["小立方", "你好立方"],
         },
       });
     });

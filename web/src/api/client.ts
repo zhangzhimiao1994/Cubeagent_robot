@@ -296,6 +296,8 @@ const RobotVoiceSettingsSchema = z.object({
   clone_preview_text: z.string().default("你好，我是你的语音机器人。"),
   clone_prompt_text: z.string().nullable().default(null),
   clone_jobs: z.array(RobotVoiceCloneJobSchema).default([]),
+  wake_word_required: z.boolean().default(false),
+  wake_words: z.array(z.string()).default([]),
 });
 
 const RobotOtaReleaseSchema = z.object({
@@ -339,6 +341,8 @@ const DEFAULT_ROBOT_VOICE_SETTINGS: z.infer<typeof RobotVoiceSettingsSchema> = {
   clone_preview_text: "你好，我是你的语音机器人。",
   clone_prompt_text: null,
   clone_jobs: [],
+  wake_word_required: false,
+  wake_words: [],
 };
 
 const DEFAULT_ROBOT_OTA_SETTINGS: z.infer<typeof RobotOtaSettingsSchema> = {

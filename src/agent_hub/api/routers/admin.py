@@ -837,6 +837,8 @@ class RobotVoiceSettings(BaseModel):
     )
     clone_prompt_text: str | None = Field(default=None, max_length=500)
     clone_jobs: list[RobotVoiceCloneJob] = Field(default_factory=list, max_length=128)
+    wake_word_required: bool = False
+    wake_words: list[str] = Field(default_factory=list, max_length=16)
 
     @field_validator("minimax_api_base_url")
     @classmethod
@@ -850,6 +852,24 @@ class RobotVoiceSettings(BaseModel):
             )
         normalized_path = parsed.path.rstrip("/")
         return urlunsplit((parsed.scheme, parsed.netloc, normalized_path, "", ""))
+
+    @field_validator("wake_words")
+    @classmethod
+    def normalize_wake_words(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            word = item.strip()
+            if not word:
+                continue
+            if len(word) > 64:
+                raise ValueError("wake word must be at most 64 characters")
+            key = word.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(word)
+        return normalized
 
 
 class RobotOtaRelease(BaseModel):
@@ -1030,6 +1050,8 @@ async def _robot_voice_settings_from_request(
         or request.clone_enabled
         or request.clone_preview_text != RobotVoiceSettings().clone_preview_text
         or bool(request.clone_prompt_text)
+        or request.wake_word_required
+        or bool(request.wake_words)
     )
     return _with_builtin_robot_voice_presets(
         voice.model_copy(

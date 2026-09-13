@@ -283,6 +283,8 @@ def test_robot_voice_settings_dedicated_api_updates_runtime_config() -> None:
             "minimax_tts_voice_id": "robot-default",
             "default_voice_id": "robot-default",
             "clone_enabled": True,
+            "wake_word_required": True,
+            "wake_words": [" 小立方 ", "小立方", "你好立方"],
         },
     )
 
@@ -294,10 +296,13 @@ def test_robot_voice_settings_dedicated_api_updates_runtime_config() -> None:
     assert "minimax_api_key" not in payload
     assert len(refreshed) == 1
     assert refreshed[0].robot_voice.minimax_tts_model == "speech-2.8-hd"
+    assert refreshed[0].robot_voice.wake_word_required is True
+    assert refreshed[0].robot_voice.wake_words == ["小立方", "你好立方"]
 
     get_response = api.get("/api/v1/admin/robot/voice-settings", headers=headers())
     assert get_response.status_code == 200
     assert get_response.json()["default_voice_id"] == "robot-default"
+    assert get_response.json()["wake_words"] == ["小立方", "你好立方"]
 
 
 def test_robot_voice_settings_include_builtin_minimax_voice_presets() -> None:

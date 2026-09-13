@@ -185,13 +185,23 @@ class FakeVoiceMediaService:
 
 
 class FakeRobotRunRepository:
-    def __init__(self, artifacts: tuple[dict[str, object], ...]) -> None:
+    def __init__(
+        self,
+        artifacts: tuple[dict[str, object], ...],
+        events: tuple[dict[str, object], ...] = (),
+    ) -> None:
         self._artifacts = artifacts
+        self._events = events
         self.artifact_calls: list[tuple[UUID, UUID]] = []
+        self.event_calls: list[tuple[UUID, UUID]] = []
 
     async def artifacts(self, tenant_id: UUID, run_id: UUID) -> tuple[dict[str, object], ...]:
         self.artifact_calls.append((tenant_id, run_id))
         return self._artifacts
+
+    async def events(self, tenant_id: UUID, run_id: UUID) -> tuple[dict[str, object], ...]:
+        self.event_calls.append((tenant_id, run_id))
+        return self._events
 
 
 def _final_speech_response(
@@ -436,6 +446,27 @@ def test_robot_websocket_returns_bounded_fallback_when_run_has_no_artifact() -> 
     assert str(ROBOT_RUN_ID) in response["payload"]["text"]
 
 
+def test_robot_websocket_reports_runtime_not_configured_when_run_fails_without_artifact() -> None:
+    run_service = WaitingRobotRunService()
+    run_repository = FakeRobotRunRepository(
+        (),
+        events=(
+            {
+                "type": "runtime.failed",
+                "reason": "runtime_not_configured",
+                "payload": {"error": {"code": "runtime.not_configured"}},
+            },
+        ),
+    )
+    client = _client(run_service=run_service, run_repository=run_repository)
+
+    response = _final_speech_response(client)
+
+    assert response["type"] == "assistant.text.done"
+    assert "服务端 Agent 模型还没有配置" in response["payload"]["text"]
+    assert str(ROBOT_RUN_ID) in response["payload"]["text"]
+
+
 @pytest.mark.asyncio
 async def test_robot_run_bridge_logs_fallback_without_raw_utterance(
     caplog: pytest.LogCaptureFixture,
@@ -564,6 +595,61 @@ def test_robot_websocket_returns_bounded_fallback_when_bridge_fails() -> None:
 
     assert response["type"] == "assistant.text.done"
     assert "我已经收到你的语音" in response["payload"]["text"]
+
+
+@pytest.mark.asyncio
+async def test_voice_media_ignores_transcript_without_required_wake_word(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="agent_hub.voice.media")
+    responder_calls = 0
+
+    class FakeSpeechProvider:
+        async def transcribe(self, _audio: object) -> SpeechTranscript:
+            return SpeechTranscript(text="今天北京天气怎么样", confidence=0.9)
+
+        async def synthesize(self, _text: str, _options: object) -> SynthesizedAudio:
+            raise AssertionError("TTS should not run without the wake word")
+
+    async def responder(_envelope):
+        nonlocal responder_calls
+        responder_calls += 1
+        return ()
+
+    service = VoiceMediaService(
+        stt_provider=FakeSpeechProvider(),
+        tts_provider=FakeSpeechProvider(),
+        responder=responder,
+        wake_word_required=True,
+        wake_words=("小立方",),
+    )
+
+    start = build_envelope(
+        message_type=RobotMessageType.AUDIO_START,
+        device_id="pi-lab-01",
+        session_id="voice-session-1",
+        payload={"codec": "wav", "sample_rate_hz": 16000},
+    )
+    chunk = build_envelope(
+        message_type=RobotMessageType.AUDIO_CHUNK,
+        device_id="pi-lab-01",
+        session_id="voice-session-1",
+        payload={"sequence": 1, "chunk_b64": "QUJD"},
+    )
+    done = build_envelope(
+        message_type=RobotMessageType.AUDIO_END,
+        device_id="pi-lab-01",
+        session_id="voice-session-1",
+        payload={"total_chunks": 1},
+    )
+
+    assert await service.handle(start) == ()
+    assert await service.handle(chunk) == ()
+    responses = await service.handle(done)
+
+    assert [response.type for response in responses] == [RobotMessageType.SPEECH_PARTIAL]
+    assert responder_calls == 0
+    assert "robot_voice_wake_word_ignored" in caplog.text
 
 
 def test_robot_mock_utterance_endpoint_requires_management_auth_and_returns_response() -> None:

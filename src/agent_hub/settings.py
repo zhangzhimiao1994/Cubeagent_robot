@@ -73,6 +73,8 @@ class Settings(BaseSettings):
     minimax_tts_speed: float = Field(default=1.0, ge=0.5, le=2.0)
     minimax_tts_volume: float = Field(default=1.0, gt=0, le=10.0)
     minimax_tts_pitch: int = Field(default=0, ge=-12, le=12)
+    robot_voice_wake_word_required: bool = False
+    robot_voice_wake_words: tuple[str, ...] = Field(default=(), max_length=16)
     bootstrap_tenant_id: UUID = UUID("00000000-0000-4000-8000-000000000001")
     bootstrap_tenant_slug: str = Field(
         default="default", min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9-]*$"

@@ -81,6 +81,8 @@ class VoiceMediaService:
         max_audio_bytes: int = _DEFAULT_MAX_AUDIO_BYTES,
         max_audio_chunks: int = _DEFAULT_MAX_AUDIO_CHUNKS,
         debug_voice_logs: bool = False,
+        wake_words: tuple[str, ...] = (),
+        wake_word_required: bool = False,
     ) -> None:
         self._stt_provider = stt_provider
         self._tts_provider = tts_provider
@@ -88,6 +90,8 @@ class VoiceMediaService:
         self._max_audio_bytes = max_audio_bytes
         self._max_audio_chunks = max_audio_chunks
         self._debug_voice_logs = debug_voice_logs
+        self._wake_words = tuple(word.strip().casefold() for word in wake_words if word.strip())
+        self._wake_word_required = wake_word_required
         self._sessions: dict[tuple[str, str], _AudioSession] = {}
 
     async def handle(self, envelope: RobotEnvelope) -> tuple[RobotEnvelope, ...]:
@@ -211,6 +215,17 @@ class VoiceMediaService:
                 **({"confidence": transcript.confidence} if transcript.confidence is not None else {}),
             },
         )
+        if self._wake_word_required and not _contains_wake_word(transcript.text, self._wake_words):
+            _LOGGER.info(
+                "robot_voice_wake_word_ignored device_id=%s session_id=%s message_id=%s "
+                "wake_word_count=%d asr_text_chars=%d",
+                envelope.device_id,
+                envelope.session_id,
+                envelope.message_id,
+                len(self._wake_words),
+                len(transcript.text),
+            )
+            return (speech,)
         try:
             responses = await self._responder(speech)
         except Exception:  # noqa: BLE001 - responder error is returned as bounded ASR-independent error.
@@ -347,3 +362,10 @@ def _preview(text: str, *, max_chars: int = 160) -> str:
     if len(collapsed) <= max_chars:
         return collapsed
     return collapsed[:max_chars].rstrip() + "..."
+
+
+def _contains_wake_word(text: str, wake_words: tuple[str, ...]) -> bool:
+    if not wake_words:
+        return False
+    normalized = text.casefold()
+    return any(word in normalized for word in wake_words)

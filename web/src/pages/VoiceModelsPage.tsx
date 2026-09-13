@@ -34,6 +34,23 @@ function voiceOptionLabel(voice: RobotVoicePreset): string {
   return `${voice.name} - ${voice.voice_id}`;
 }
 
+function wakeWordsText(words: string[]): string {
+  return words.join("\n");
+}
+
+function parseWakeWords(value: string): string[] {
+  const seen = new Set<string>();
+  const words: string[] = [];
+  for (const raw of value.split(/[\n,，]/)) {
+    const word = raw.trim();
+    const key = word.toLocaleLowerCase();
+    if (!word || seen.has(key)) continue;
+    seen.add(key);
+    words.push(word);
+  }
+  return words;
+}
+
 export function VoiceModelsPage() {
   const queryClient = useQueryClient();
   const settingsQuery = useQuery({
@@ -50,9 +67,13 @@ export function VoiceModelsPage() {
   const [cloneDraft, setCloneDraft] = useState(EMPTY_CLONE);
   const [sourceAudio, setSourceAudio] = useState<File | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [wakeWordsDraft, setWakeWordsDraft] = useState("");
 
   useEffect(() => {
-    if (settingsQuery.data) setSettings(cloneSettings(settingsQuery.data));
+    if (settingsQuery.data) {
+      setSettings(cloneSettings(settingsQuery.data));
+      setWakeWordsDraft(wakeWordsText(settingsQuery.data.wake_words));
+    }
   }, [settingsQuery.data]);
 
   const saveSettings = useMutation({
@@ -63,6 +84,7 @@ export function VoiceModelsPage() {
     },
     onSuccess: async (saved) => {
       setSettings(cloneSettings(saved));
+      setWakeWordsDraft(wakeWordsText(saved.wake_words));
       await queryClient.invalidateQueries({ queryKey: ["robot-voice-settings"] });
     },
     onError: (error) => {
@@ -325,7 +347,27 @@ export function VoiceModelsPage() {
             />
             允许控制台发起声音克隆
           </label>
+          <label className="inline-check">
+            <input
+              type="checkbox"
+              checked={settings.wake_word_required}
+              onChange={(event) => updateSettings({ wake_word_required: event.target.checked })}
+            />
+            必须命中唤醒词才触发 Agent
+          </label>
           <div className="form-grid">
+            <label htmlFor="robot-wake-words">
+              唤醒词
+              <textarea
+                id="robot-wake-words"
+                placeholder="例如：小立方，每行一个"
+                value={wakeWordsDraft}
+                onChange={(event) => {
+                  setWakeWordsDraft(event.target.value);
+                  updateSettings({ wake_words: parseWakeWords(event.target.value) });
+                }}
+              />
+            </label>
             <label htmlFor="robot-clone-model">
               克隆模型
               <select

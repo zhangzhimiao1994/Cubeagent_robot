@@ -1168,6 +1168,8 @@ def _robot_voice_media_service_from_settings(
         tts_provider=client,
         responder=cast(Any, responder),
         debug_voice_logs=settings.robot_voice_debug_logs,
+        wake_words=settings.robot_voice_wake_words,
+        wake_word_required=settings.robot_voice_wake_word_required,
     ), client
 
 
@@ -1223,6 +1225,8 @@ async def _robot_voice_media_service_from_admin_settings(
         tts_provider=client,
         responder=cast(Any, responder),
         debug_voice_logs=environment_settings.robot_voice_debug_logs,
+        wake_words=tuple(voice.wake_words),
+        wake_word_required=voice.wake_word_required,
     ), client
 
 

@@ -38,6 +38,12 @@ class RobotRunRepositoryProtocol(Protocol):
         run_id: UUID,
     ) -> tuple[dict[str, object], ...] | Awaitable[tuple[dict[str, object], ...]]: ...
 
+    def events(
+        self,
+        tenant_id: UUID,
+        run_id: UUID,
+    ) -> tuple[dict[str, object], ...] | Awaitable[tuple[dict[str, object], ...]]: ...
+
 
 class CompanionResponder:
     """Replaceable bridge from a robot utterance to companion text."""
@@ -169,6 +175,14 @@ class RobotRunBridge:
             message_id=message_id,
         )
         if text is None:
+            failure_text = await self._failure_text(
+                run_id,
+                device_id=device_id,
+                session_id=session_id,
+                message_id=message_id,
+            )
+            if failure_text is not None:
+                return failure_text
             _LOGGER.warning(
                 "robot_voice_fallback reason=run_artifact_missing device_id=%s "
                 "session_id=%s message_id=%s conversation_id=%s run_id=%s",
@@ -180,6 +194,36 @@ class RobotRunBridge:
             )
             return _fallback_text(run_id)
         return _bounded_robot_text(text)
+
+    async def _failure_text(
+        self,
+        run_id: UUID,
+        *,
+        device_id: str,
+        session_id: str,
+        message_id: str | None,
+    ) -> str | None:
+        events = getattr(self._run_repository, "events", None)
+        if not callable(events):
+            return None
+        try:
+            run_events = await _maybe_await(events(self._tenant_id, run_id))
+        except Exception:  # noqa: BLE001 - diagnostics must not break robot fallback.
+            return None
+        reason = _runtime_failure_reason(run_events)
+        if reason is None:
+            return None
+        _LOGGER.warning(
+            "robot_voice_fallback reason=%s device_id=%s session_id=%s message_id=%s run_id=%s",
+            reason,
+            device_id,
+            session_id,
+            message_id,
+            run_id,
+        )
+        if reason == "runtime_not_configured":
+            return _fallback_text(run_id, detail="服务端 Agent 模型还没有配置，暂时不能生成回复。")
+        return _fallback_text(run_id)
 
     async def _artifact_text(
         self,
@@ -259,11 +303,39 @@ def _bounded_robot_text(text: str) -> str:
     return stripped[:_MAX_ROBOT_TEXT_CHARS].rstrip() + "\n\n……内容较长，已截断。"
 
 
-def _fallback_text(run_id: UUID | None) -> str:
-    lines = ["我已经收到你的语音，服务端 Agent 正在处理或暂时没有生成可播报结果。"]
+def _fallback_text(run_id: UUID | None, *, detail: str | None = None) -> str:
+    lines = [
+        f"我已经收到你的语音，{detail}"
+        if detail
+        else "我已经收到你的语音，服务端 Agent 正在处理或暂时没有生成可播报结果。"
+    ]
     if run_id is not None:
         lines.append(f"Run ID: {run_id}")
     return "\n".join(lines)
+
+
+def _runtime_failure_reason(events: object) -> str | None:
+    if not isinstance(events, tuple | list):
+        return None
+    for event in reversed(events):
+        if not isinstance(event, Mapping):
+            continue
+        if event.get("type") != "runtime.failed":
+            continue
+        reason = event.get("reason")
+        if isinstance(reason, str) and reason:
+            return reason
+        payload = event.get("payload")
+        if isinstance(payload, Mapping):
+            payload_reason = payload.get("reason")
+            if isinstance(payload_reason, str) and payload_reason:
+                return payload_reason
+            error = payload.get("error")
+            if isinstance(error, Mapping):
+                code = error.get("code")
+                if isinstance(code, str) and code == "runtime.not_configured":
+                    return "runtime_not_configured"
+    return None
 
 
 def _preview(text: str, *, max_chars: int = 160) -> str:
