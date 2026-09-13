@@ -105,7 +105,7 @@ async def test_minimax_synthesize_rejects_api_error() -> None:
         ),
     )
 
-    with pytest.raises(RuntimeError, match="text-to-speech returned an error"):
+    with pytest.raises(RuntimeError, match="auth failed"):
         await client.synthesize(
             "服务端回答",
             VoiceSynthesisOptions(voice_id=None, model="speech-2.8-turbo", audio_format="mp3"),
@@ -113,16 +113,15 @@ async def test_minimax_synthesize_rejects_api_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_minimax_uploads_voice_file_and_starts_clone_job() -> None:
+async def test_minimax_clones_voice_from_audio_with_one_step_multipart() -> None:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        if str(request.url).endswith("/v1/files/upload"):
-            return httpx.Response(200, json={"file": {"file_id": 123456789012345680}})
         return httpx.Response(
             200,
             json={
+                "voice_id": "robot-clone",
                 "input_sensitive": False,
                 "demo_audio": "https://example.test/demo.mp3",
                 "base_resp": {"status_code": 0, "status_msg": "success"},
@@ -132,40 +131,86 @@ async def test_minimax_uploads_voice_file_and_starts_clone_job() -> None:
     client = MiniMaxSpeechClient(
         MiniMaxSpeechConfig(api_key="secret"),
         client=httpx.AsyncClient(
-            base_url="https://api.minimax.io",
+            base_url="https://api.minimaxi.com",
             transport=httpx.MockTransport(handler),
         ),
     )
 
-    file_id = await client.upload_voice_file(
+    result = await client.clone_voice_from_audio(
         b"voice-bytes",
+        voice_id="robot-clone",
         filename="sample.wav",
         content_type="audio/wav",
-        purpose="voice_clone",
-    )
-    result = await client.clone_voice(
-        voice_id="robot-clone",
-        source_file_id=file_id,
         model="speech-2.8-hd",
         preview_text="你好，我是你的语音机器人。",
         prompt_text="温和、自然、清晰。",
     )
 
-    assert file_id == "123456789012345680"
-    assert str(requests[0].url) == "https://api.minimax.io/v1/files/upload"
+    assert len(requests) == 1
+    assert str(requests[0].url) == "https://api.minimaxi.com/v1/voice_clone"
     assert requests[0].headers["authorization"] == "Bearer secret"
-    assert b'voice_clone' in requests[0].content
+    assert str(requests[0].headers["content-type"]).startswith("multipart/form-data")
+    assert b'name="audio"; filename="sample.wav"' in requests[0].content
     assert b"voice-bytes" in requests[0].content
-    assert str(requests[1].url) == "https://api.minimax.io/v1/voice_clone"
-    assert json.loads(requests[1].content) == {
-        "file_id": 123456789012345680,
-        "voice_id": "robot-clone",
-        "model": "speech-2.8-hd",
-        "text": "你好，我是你的语音机器人。",
-        "text_validation": "温和、自然、清晰。",
-    }
+    assert b'name="model"' in requests[0].content
+    assert b"speech-2.8-hd" in requests[0].content
+    assert b'name="voice_id"' in requests[0].content
+    assert b"robot-clone" in requests[0].content
     assert result["voice_id"] == "robot-clone"
     assert result["preview_audio_url"] == "https://example.test/demo.mp3"
+
+
+@pytest.mark.asyncio
+async def test_minimax_clone_voice_from_audio_reports_provider_status_message() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"base_resp": {"status_code": 1008, "status_msg": "insufficient balance"}},
+        )
+
+    client = MiniMaxSpeechClient(
+        MiniMaxSpeechConfig(api_key="secret"),
+        client=httpx.AsyncClient(
+            base_url="https://api.minimaxi.com",
+            transport=httpx.MockTransport(handler),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="insufficient balance"):
+        await client.clone_voice_from_audio(
+            b"voice-bytes",
+            voice_id="robot-clone",
+            filename="sample.wav",
+            content_type="audio/wav",
+            model="speech-2.8-turbo",
+            preview_text="你好",
+            prompt_text=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_minimax_clone_voice_from_audio_requires_success_marker() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"unexpected": "shape"})
+
+    client = MiniMaxSpeechClient(
+        MiniMaxSpeechConfig(api_key="secret"),
+        client=httpx.AsyncClient(
+            base_url="https://api.minimaxi.com",
+            transport=httpx.MockTransport(handler),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="response did not include voice_id"):
+        await client.clone_voice_from_audio(
+            b"voice-bytes",
+            voice_id="robot-clone",
+            filename="sample.wav",
+            content_type="audio/wav",
+            model="speech-2.8-turbo",
+            preview_text="你好",
+            prompt_text=None,
+        )
 
 
 @pytest.mark.asyncio

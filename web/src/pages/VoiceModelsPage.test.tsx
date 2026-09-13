@@ -72,7 +72,7 @@ const voiceSettings: VoiceSettingsFixture = {
   media_provider: "disabled",
   minimax_credential_ref: null,
   minimax_api_key_configured: false,
-  minimax_api_base_url: "https://api.minimax.io",
+  minimax_api_base_url: "https://api.minimaxi.com",
   minimax_asr_model: "asr-1.0",
   minimax_tts_model: "speech-2.8-turbo",
   minimax_tts_voice_id: null,

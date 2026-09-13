@@ -316,6 +316,23 @@ def test_robot_voice_settings_include_builtin_minimax_voice_presets() -> None:
     }.issubset(builtin_voice_ids)
 
 
+def test_robot_voice_settings_migrate_legacy_minimax_base_url() -> None:
+    api = client()
+    current = api.get("/api/v1/admin/robot/voice-settings", headers=headers()).json()
+    current["minimax_api_base_url"] = "https://api.minimax.io"
+
+    update_response = api.put(
+        "/api/v1/admin/robot/voice-settings",
+        headers=headers(),
+        json=current,
+    )
+    get_response = api.get("/api/v1/admin/robot/voice-settings", headers=headers())
+
+    assert update_response.status_code == 200
+    assert get_response.status_code == 200
+    assert get_response.json()["minimax_api_base_url"] == "https://api.minimaxi.com"
+
+
 def test_robot_voice_settings_keep_sixty_four_custom_voices_with_builtin_presets() -> None:
     api = client()
     current = api.get("/api/v1/admin/settings", headers=headers()).json()
@@ -437,44 +454,35 @@ def test_robot_voice_builtin_presets_cannot_be_deleted() -> None:
 def test_robot_voice_clone_upload_records_job_and_adds_cloned_voice() -> None:
     class FakeMiniMaxCloneClient:
         def __init__(self) -> None:
-            self.uploads: list[dict[str, object]] = []
             self.clone_requests: list[dict[str, object]] = []
 
-        async def upload_voice_file(
+        async def clone_voice_from_audio(
             self,
             audio: bytes,
             *,
+            voice_id: str,
             filename: str,
             content_type: str,
-            purpose: str,
-        ) -> str:
-            self.uploads.append(
-                {
-                    "audio": audio,
-                    "filename": filename,
-                    "content_type": content_type,
-                    "purpose": purpose,
-                }
-            )
-            return "minimax-file-1"
-
-        async def clone_voice(
-            self,
-            *,
-            voice_id: str,
-            source_file_id: str,
             model: str,
             preview_text: str,
             prompt_text: str | None,
+            prompt_audio: bytes | None = None,
+            prompt_filename: str | None = None,
+            prompt_content_type: str | None = None,
             prompt_file_id: str | None = None,
         ) -> dict[str, str]:
             self.clone_requests.append(
                 {
+                    "audio": audio,
                     "voice_id": voice_id,
-                    "source_file_id": source_file_id,
+                    "filename": filename,
+                    "content_type": content_type,
                     "model": model,
                     "preview_text": preview_text,
                     "prompt_text": prompt_text,
+                    "prompt_audio": prompt_audio,
+                    "prompt_filename": prompt_filename,
+                    "prompt_content_type": prompt_content_type,
                     "prompt_file_id": prompt_file_id,
                 }
             )
@@ -512,16 +520,22 @@ def test_robot_voice_clone_upload_records_job_and_adds_cloned_voice() -> None:
     assert job["status"] == "succeeded"
     assert job["voice_id"] == "cloned-warm"
     assert job["source_filename"] == "sample.wav"
-    assert job["provider_file_id"] == "minimax-file-1"
-    assert fake_client.uploads == [
+    assert job["provider_file_id"] is None
+    assert fake_client.clone_requests == [
         {
             "audio": b"RIFFvoice-data",
+            "voice_id": "cloned-warm",
             "filename": "sample.wav",
             "content_type": "audio/wav",
-            "purpose": "voice_clone",
+            "model": "speech-2.8-hd",
+            "preview_text": "你好，我是你的语音机器人。",
+            "prompt_text": "自然、温和、清晰。",
+            "prompt_audio": None,
+            "prompt_filename": None,
+            "prompt_content_type": None,
+            "prompt_file_id": None,
         }
     ]
-    assert fake_client.clone_requests[0]["model"] == "speech-2.8-hd"
 
     settings_response = api.get("/api/v1/admin/robot/voice-settings", headers=headers())
     assert settings_response.status_code == 200
@@ -625,6 +639,47 @@ def test_robot_voice_clone_rejects_large_prompt_audio_before_provider_call() -> 
 
     assert response.status_code == 422
     assert response.json()["error"]["message"] == "prompt audio is too large"
+
+
+def test_robot_voice_clone_rejects_prompt_audio_before_provider_call() -> None:
+    class FakeMiniMaxCloneClient:
+        called = False
+
+        async def clone_voice_from_audio(self, *_args: object, **_kwargs: object) -> dict[str, str]:
+            self.called = True
+            return {}
+
+    api = client()
+    fake_client = FakeMiniMaxCloneClient()
+    cast(Any, api.app).state.robot_voice_clone_client = fake_client
+    current = api.get("/api/v1/admin/settings", headers=headers()).json()
+    current["robot_voice"] = {
+        **current["robot_voice"],
+        "enabled": True,
+        "media_provider": "minimax",
+        "minimax_api_key": "minimax-secret-key",
+        "clone_enabled": True,
+        "clone_prompt_text": "短样本提示词",
+    }
+    assert api.put("/api/v1/admin/settings", headers=headers(), json=current).status_code == 200
+
+    response = api.post(
+        "/api/v1/admin/robot/voice-clones",
+        headers=headers(),
+        data={
+            "voice_id": "ClonedWarm01",
+            "voice_name": "克隆温和音色",
+            "authorization_confirmed": "true",
+        },
+        files={
+            "source_audio": ("sample.wav", b"RIFFvoice-data", "audio/wav"),
+            "prompt_audio": ("prompt.wav", b"RIFFprompt-data", "audio/wav"),
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["message"] == "prompt audio is not supported"
+    assert fake_client.called is False
 
 
 def test_openclaw_operation_requires_feature_switch() -> None:

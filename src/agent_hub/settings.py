@@ -61,7 +61,7 @@ class Settings(BaseSettings):
         default=SecretStr(""),
         validation_alias=AliasChoices("AGENT_HUB_MINIMAX_API_KEY", "MINIMAX_API_KEY"),
     )
-    minimax_api_base_url: str = Field(default="https://api.minimax.io")
+    minimax_api_base_url: str = Field(default="https://api.minimaxi.com")
     minimax_asr_model: str = Field(default="asr-1.0")
     minimax_tts_model: str = Field(default="speech-2.8-turbo")
     minimax_tts_voice_id: str | None = None

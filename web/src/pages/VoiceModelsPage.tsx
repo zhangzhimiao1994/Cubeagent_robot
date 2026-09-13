@@ -49,7 +49,6 @@ export function VoiceModelsPage() {
   const [presetDraft, setPresetDraft] = useState(EMPTY_PRESET);
   const [cloneDraft, setCloneDraft] = useState(EMPTY_CLONE);
   const [sourceAudio, setSourceAudio] = useState<File | null>(null);
-  const [promptAudio, setPromptAudio] = useState<File | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -118,13 +117,11 @@ export function VoiceModelsPage() {
         voice_name: voiceName,
         authorization_confirmed: cloneDraft.authorization_confirmed,
         source_audio: sourceAudio,
-        prompt_audio: promptAudio,
       });
     },
     onSuccess: async () => {
       setCloneDraft(EMPTY_CLONE);
       setSourceAudio(null);
-      setPromptAudio(null);
       await queryClient.invalidateQueries({ queryKey: ["robot-voice-settings"] });
       await queryClient.invalidateQueries({ queryKey: ["robot-voice-clone-jobs"] });
       const refreshed = await api.robotVoiceSettings();
@@ -173,10 +170,6 @@ export function VoiceModelsPage() {
 
   function updateSourceAudio(event: ChangeEvent<HTMLInputElement>) {
     setSourceAudio(event.target.files?.[0] ?? null);
-  }
-
-  function updatePromptAudio(event: ChangeEvent<HTMLInputElement>) {
-    setPromptAudio(event.target.files?.[0] ?? null);
   }
 
   return (
@@ -448,10 +441,6 @@ export function VoiceModelsPage() {
             <label htmlFor="source-audio">
               源声音样本
               <input id="source-audio" type="file" accept="audio/*" onChange={updateSourceAudio} />
-            </label>
-            <label htmlFor="prompt-audio">
-              Prompt 样本
-              <input id="prompt-audio" type="file" accept="audio/*" onChange={updatePromptAudio} />
             </label>
           </div>
           <label className="inline-check">

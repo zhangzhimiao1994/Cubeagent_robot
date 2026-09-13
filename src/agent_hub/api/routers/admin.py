@@ -112,6 +112,8 @@ _OPENAI_COMPATIBLE_AUTH_HINT = (
 _ROBOT_VOICE_ID_PATTERN = r"^[A-Za-z](?:[A-Za-z0-9_-]{6,126}[A-Za-z0-9])$"
 _MAX_ROBOT_VOICE_CLONE_AUDIO_BYTES = 20 * 1024 * 1024
 _MAX_CUSTOM_ROBOT_VOICES = 64
+_MINIMAX_API_BASE_URL = "https://api.minimaxi.com"
+_LEGACY_MINIMAX_API_BASE_URLS = frozenset({"https://api.minimax.io"})
 _BUILTIN_MINIMAX_ROBOT_VOICES: tuple[dict[str, object], ...] = (
     {
         "id": "minimax-cn-warm-girl",
@@ -805,7 +807,7 @@ class RobotVoiceSettings(BaseModel):
     minimax_credential_ref: str | None = Field(default=None, max_length=128)
     minimax_api_key: SecretStr | None = Field(default=None, exclude=True)
     minimax_api_key_configured: bool = False
-    minimax_api_base_url: str = Field(default="https://api.minimax.io", max_length=2048)
+    minimax_api_base_url: str = Field(default=_MINIMAX_API_BASE_URL, max_length=2048)
     minimax_asr_model: str = Field(default="asr-1.0", min_length=1, max_length=128)
     minimax_tts_model: str = Field(default="speech-2.8-turbo", min_length=1, max_length=128)
     minimax_tts_voice_id: str | None = Field(default=None, max_length=128)
@@ -867,7 +869,15 @@ def _with_builtin_robot_voice_presets(settings: RobotVoiceSettings) -> RobotVoic
         for voice in settings.voices
         if not voice.builtin and voice.id not in builtin_ids and voice.voice_id not in builtin_voice_ids
     ]
-    return settings.model_copy(update={"voices": [*builtin, *custom]})
+    return _with_minimax_api_base_url_defaults(
+        settings.model_copy(update={"voices": [*builtin, *custom]})
+    )
+
+
+def _with_minimax_api_base_url_defaults(settings: RobotVoiceSettings) -> RobotVoiceSettings:
+    if settings.minimax_api_base_url in _LEGACY_MINIMAX_API_BASE_URLS:
+        return settings.model_copy(update={"minimax_api_base_url": _MINIMAX_API_BASE_URL})
+    return settings
 
 
 class SystemSettingsRequest(BaseModel):
@@ -8282,33 +8292,34 @@ async def create_robot_voice_clone(
                     "request_validation",
                     "prompt audio requires clone prompt text",
                 )
+            raise PublicAPIError(
+                422,
+                "request_validation",
+                "prompt audio is not supported",
+            )
     close_client = False
     clone_client = getattr(request.app.state, "robot_voice_clone_client", None)
     if clone_client is None:
         clone_client = await _minimax_clone_client_from_settings(current, service)
         close_client = True
     try:
-        provider_file_id = await clone_client.upload_voice_file(
+        prompt_file_id = None
+        clone_result = await clone_client.clone_voice_from_audio(
             source_bytes,
+            voice_id=voice_id,
             filename=filename,
             content_type=content_type,
-            purpose="voice_clone",
-        )
-        prompt_file_id = None
-        if prompt_audio is not None and prompt_bytes:
-            prompt_file_id = await clone_client.upload_voice_file(
-                prompt_bytes,
-                filename=prompt_filename or "prompt-audio.wav",
-                content_type=prompt_audio.content_type or "application/octet-stream",
-                purpose="prompt_audio",
-            )
-        clone_result = await clone_client.clone_voice(
-            voice_id=voice_id,
-            source_file_id=provider_file_id,
             model=current.clone_model,
             preview_text=current.clone_preview_text,
             prompt_text=current.clone_prompt_text,
-            prompt_file_id=prompt_file_id,
+            prompt_audio=prompt_bytes,
+            prompt_filename=prompt_filename,
+            prompt_content_type=(
+                prompt_audio.content_type or "application/octet-stream"
+                if prompt_audio is not None and prompt_bytes
+                else None
+            ),
+            prompt_file_id=None,
         )
     except (ConnectionError, KeyError, RuntimeError, ValueError, httpx.HTTPError) as error:
         job = RobotVoiceCloneJob(
@@ -8343,7 +8354,7 @@ async def create_robot_voice_clone(
         source_size_bytes=len(source_bytes),
         source_content_type=content_type,
         prompt_filename=prompt_filename,
-        provider_file_id=provider_file_id,
+        provider_file_id=None,
         provider_prompt_file_id=prompt_file_id,
         preview_audio_url=str(clone_result.get("preview_audio_url") or "") or None,
     )
