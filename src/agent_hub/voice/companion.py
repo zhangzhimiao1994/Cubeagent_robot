@@ -64,11 +64,13 @@ class RobotRunBridge:
         run_repository: RobotRunRepositoryProtocol,
         tenant_id: UUID,
         actor_id: UUID | None = None,
+        debug_voice_logs: bool = False,
     ) -> None:
         self._run_service = run_service
         self._run_repository = run_repository
         self._tenant_id = tenant_id
         self._actor_id = actor_id or tenant_id
+        self._debug_voice_logs = debug_voice_logs
 
     async def respond_text(
         self,
@@ -86,7 +88,14 @@ class RobotRunBridge:
                 message_id=message_id,
             )
         except Exception as error:  # noqa: BLE001 - robot voice must degrade safely.
-            _LOGGER.warning("robot_run_bridge_failed error_type=%s", type(error).__name__)
+            _LOGGER.warning(
+                "robot_voice_fallback reason=bridge_exception error_type=%s "
+                "device_id=%s session_id=%s message_id=%s",
+                type(error).__name__,
+                device_id,
+                session_id,
+                message_id,
+            )
             return _fallback_text(None)
 
     async def _respond_text(
@@ -117,6 +126,17 @@ class RobotRunBridge:
             "channel_entry_policy": "main_agent_decides",
             "requested_channel_features": "voice,audio,robot",
         }
+        if self._debug_voice_logs:
+            _LOGGER.info(
+                "robot_voice_run_submit device_id=%s session_id=%s message_id=%s "
+                "conversation_id=%s utterance_chars=%d utterance_preview=%s",
+                device_id,
+                session_id,
+                message_id,
+                conversation_id,
+                len(utterance),
+                _preview(utterance),
+            )
         submitted = await _maybe_await(
             self._run_service.submit(
                 tenant_id=self._tenant_id,
@@ -133,18 +153,71 @@ class RobotRunBridge:
         if run_id is not None and callable(execute):
             await _maybe_await(execute(run_id))
         if run_id is None:
+            _LOGGER.warning(
+                "robot_voice_fallback reason=run_id_missing device_id=%s "
+                "session_id=%s message_id=%s conversation_id=%s",
+                device_id,
+                session_id,
+                message_id,
+                conversation_id,
+            )
             return _fallback_text(None)
-        text = await self._artifact_text(run_id)
+        text = await self._artifact_text(
+            run_id,
+            device_id=device_id,
+            session_id=session_id,
+            message_id=message_id,
+        )
         if text is None:
+            _LOGGER.warning(
+                "robot_voice_fallback reason=run_artifact_missing device_id=%s "
+                "session_id=%s message_id=%s conversation_id=%s run_id=%s",
+                device_id,
+                session_id,
+                message_id,
+                conversation_id,
+                run_id,
+            )
             return _fallback_text(run_id)
         return _bounded_robot_text(text)
 
-    async def _artifact_text(self, run_id: UUID) -> str | None:
+    async def _artifact_text(
+        self,
+        run_id: UUID,
+        *,
+        device_id: str,
+        session_id: str,
+        message_id: str | None,
+    ) -> str | None:
         artifacts = await _maybe_await(self._run_repository.artifacts(self._tenant_id, run_id))
-        for artifact in reversed(artifacts):
+        for index, artifact in reversed(tuple(enumerate(artifacts))):
             text = _artifact_text(artifact)
             if text is not None:
+                if self._debug_voice_logs:
+                    _LOGGER.info(
+                        "robot_voice_run_artifact_selected device_id=%s session_id=%s "
+                        "message_id=%s run_id=%s artifact_count=%d artifact_index=%d "
+                        "response_chars=%d response_preview=%s",
+                        device_id,
+                        session_id,
+                        message_id,
+                        run_id,
+                        len(artifacts),
+                        index,
+                        len(text),
+                        _preview(text),
+                    )
                 return text
+        if self._debug_voice_logs:
+            _LOGGER.info(
+                "robot_voice_run_artifact_missing device_id=%s session_id=%s "
+                "message_id=%s run_id=%s artifact_count=%d",
+                device_id,
+                session_id,
+                message_id,
+                run_id,
+                len(artifacts),
+            )
         return None
 
 
@@ -191,6 +264,13 @@ def _fallback_text(run_id: UUID | None) -> str:
     if run_id is not None:
         lines.append(f"Run ID: {run_id}")
     return "\n".join(lines)
+
+
+def _preview(text: str, *, max_chars: int = 160) -> str:
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= max_chars:
+        return collapsed
+    return collapsed[:max_chars].rstrip() + "..."
 
 
 def _safe_conversation_part(value: str) -> str:

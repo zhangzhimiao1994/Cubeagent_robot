@@ -926,6 +926,7 @@ def create_app(
                     run_repository=cast(Any, active_run_repository),
                     tenant_id=configured.bootstrap_tenant_id,
                     actor_id=configured.bootstrap_tenant_id,
+                    debug_voice_logs=configured.robot_voice_debug_logs,
                 )
             voice_admin_service = getattr(application.state, "admin_resource_service", None)
             if voice_admin_service is not None:
@@ -986,6 +987,7 @@ def create_app(
             run_repository=cast(Any, run_repository),
             tenant_id=configured_settings.bootstrap_tenant_id,
             actor_id=configured_settings.bootstrap_tenant_id,
+            debug_voice_logs=configured_settings.robot_voice_debug_logs,
         )
         if run_service is not None and run_repository is not None
         else None
@@ -1164,6 +1166,7 @@ def _robot_voice_media_service_from_settings(
         stt_provider=client,
         tts_provider=client,
         responder=cast(Any, responder),
+        debug_voice_logs=settings.robot_voice_debug_logs,
     ), client
 
 
@@ -1218,6 +1221,7 @@ async def _robot_voice_media_service_from_admin_settings(
         stt_provider=client,
         tts_provider=client,
         responder=cast(Any, responder),
+        debug_voice_logs=environment_settings.robot_voice_debug_logs,
     ), client
 
 

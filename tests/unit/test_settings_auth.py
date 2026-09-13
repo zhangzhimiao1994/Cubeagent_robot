@@ -132,6 +132,11 @@ def test_log_level_accepts_known_levels_and_rejects_invalid_values() -> None:
         Settings.model_validate({"log_level": "VERBOSE"})
 
 
+def test_robot_voice_debug_logs_default_off_and_can_be_enabled() -> None:
+    assert Settings.model_validate({}).robot_voice_debug_logs is False
+    assert Settings.model_validate({"robot_voice_debug_logs": True}).robot_voice_debug_logs is True
+
+
 @pytest.mark.parametrize(
     "name", [" ", "\tName", "Name\n", "x" * 201]
 )

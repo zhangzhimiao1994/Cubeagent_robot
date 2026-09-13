@@ -1,3 +1,4 @@
+import logging
 from uuid import UUID
 
 import pytest
@@ -16,7 +17,7 @@ from agent_hub.runs.service import SubmittedRun
 from agent_hub.settings import Settings
 from agent_hub.voice.companion import RobotRunBridge
 from agent_hub.voice.gateway import create_robot_voice_router
-from agent_hub.voice.media import SpeechTranscript, SynthesizedAudio
+from agent_hub.voice.media import SpeechTranscript, SynthesizedAudio, VoiceMediaService
 from agent_hub.voice.minimax import MiniMaxSpeechConfig
 
 ROBOT_RUN_ID = UUID("00000000-0000-4000-8000-000000000301")
@@ -433,6 +434,124 @@ def test_robot_websocket_returns_bounded_fallback_when_run_has_no_artifact() -> 
     assert response["type"] == "assistant.text.done"
     assert "我已经收到你的语音" in response["payload"]["text"]
     assert str(ROBOT_RUN_ID) in response["payload"]["text"]
+
+
+@pytest.mark.asyncio
+async def test_robot_run_bridge_logs_fallback_without_raw_utterance(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="agent_hub.voice.companion")
+    bridge = RobotRunBridge(
+        run_service=WaitingRobotRunService(),
+        run_repository=FakeRobotRunRepository(()),
+        tenant_id=ROBOT_TENANT_ID,
+    )
+
+    response = await bridge.respond_text(
+        "这是一段不应该默认写入日志的语音",
+        device_id="pi-lab-01",
+        session_id="voice-session-1",
+    )
+
+    assert "我已经收到你的语音" in response
+    assert "robot_voice_fallback" in caplog.text
+    assert "reason=run_artifact_missing" in caplog.text
+    assert str(ROBOT_RUN_ID) in caplog.text
+    assert "不应该默认写入日志" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_robot_run_bridge_debug_logs_include_utterance_and_artifact_preview(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="agent_hub.voice.companion")
+    bridge = RobotRunBridge(
+        run_service=FakeRobotRunService(),
+        run_repository=FakeRobotRunRepository(
+            ({"content": {"text": "服务端 Agent 回复详情"}},)
+        ),
+        tenant_id=ROBOT_TENANT_ID,
+        debug_voice_logs=True,
+    )
+
+    response = await bridge.respond_text(
+        "帮我测试语音交互",
+        device_id="pi-lab-01",
+        session_id="voice-session-1",
+    )
+
+    assert response == "服务端 Agent 回复详情"
+    assert "robot_voice_run_submit" in caplog.text
+    assert "utterance_preview=帮我测试语音交互" in caplog.text
+    assert "robot_voice_run_artifact_selected" in caplog.text
+    assert "response_preview=服务端 Agent 回复详情" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_voice_media_debug_logs_asr_and_tts_without_audio_chunks(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="agent_hub.voice.media")
+
+    class FakeSpeechProvider:
+        async def transcribe(self, _audio: object) -> SpeechTranscript:
+            return SpeechTranscript(text="识别出来的用户语音", confidence=0.91)
+
+        async def synthesize(self, text: str, _options: object) -> SynthesizedAudio:
+            assert text == "准备播放的回复"
+            return SynthesizedAudio(codec="mp3", data=b"mp3", sample_rate_hz=32000)
+
+    async def responder(envelope):
+        return (
+            build_envelope(
+                message_type=RobotMessageType.ASSISTANT_TEXT_DONE,
+                device_id=envelope.device_id,
+                session_id=envelope.session_id,
+                payload={"text": "准备播放的回复"},
+            ),
+        )
+
+    service = VoiceMediaService(
+        stt_provider=FakeSpeechProvider(),
+        tts_provider=FakeSpeechProvider(),
+        responder=responder,
+        debug_voice_logs=True,
+    )
+
+    start = build_envelope(
+        message_type=RobotMessageType.AUDIO_START,
+        device_id="pi-lab-01",
+        session_id="voice-session-1",
+        payload={"codec": "wav", "sample_rate_hz": 16000},
+    )
+    chunk = build_envelope(
+        message_type=RobotMessageType.AUDIO_CHUNK,
+        device_id="pi-lab-01",
+        session_id="voice-session-1",
+        payload={"sequence": 1, "chunk_b64": "QUJD"},
+    )
+    done = build_envelope(
+        message_type=RobotMessageType.AUDIO_END,
+        device_id="pi-lab-01",
+        session_id="voice-session-1",
+        payload={"total_chunks": 1},
+    )
+
+    assert await service.handle(start) == ()
+    assert await service.handle(chunk) == ()
+    responses = await service.handle(done)
+
+    assert [response.type for response in responses] == [
+        RobotMessageType.SPEECH_PARTIAL,
+        RobotMessageType.ASSISTANT_TEXT_DONE,
+        RobotMessageType.TTS_AUDIO_CHUNK,
+        RobotMessageType.TTS_AUDIO_DONE,
+    ]
+    assert "robot_voice_asr_done" in caplog.text
+    assert "asr_text_preview=识别出来的用户语音" in caplog.text
+    assert "robot_voice_tts_start" in caplog.text
+    assert "assistant_text_preview=准备播放的回复" in caplog.text
+    assert "QUJD" not in caplog.text
 
 
 def test_robot_websocket_returns_bounded_fallback_when_bridge_fails() -> None:

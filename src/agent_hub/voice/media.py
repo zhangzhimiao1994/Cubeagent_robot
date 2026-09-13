@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -13,6 +14,7 @@ _DEFAULT_TTS_FORMAT = "mp3"
 _DEFAULT_MAX_AUDIO_BYTES = 10 * 1024 * 1024
 _DEFAULT_MAX_AUDIO_CHUNKS = 256
 _MAX_TTS_TEXT_CHARS = 2_000
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -78,12 +80,14 @@ class VoiceMediaService:
         responder: Responder,
         max_audio_bytes: int = _DEFAULT_MAX_AUDIO_BYTES,
         max_audio_chunks: int = _DEFAULT_MAX_AUDIO_CHUNKS,
+        debug_voice_logs: bool = False,
     ) -> None:
         self._stt_provider = stt_provider
         self._tts_provider = tts_provider
         self._responder = responder
         self._max_audio_bytes = max_audio_bytes
         self._max_audio_chunks = max_audio_chunks
+        self._debug_voice_logs = debug_voice_logs
         self._sessions: dict[tuple[str, str], _AudioSession] = {}
 
     async def handle(self, envelope: RobotEnvelope) -> tuple[RobotEnvelope, ...]:
@@ -108,6 +112,19 @@ class VoiceMediaService:
             tts_model=_payload_string(envelope, "tts_model") or _DEFAULT_TTS_MODEL,
             chunks=[],
         )
+        if self._debug_voice_logs:
+            _LOGGER.info(
+                "robot_voice_audio_start device_id=%s session_id=%s message_id=%s "
+                "codec=%s sample_rate_hz=%s language=%s voice_id=%s tts_model=%s",
+                envelope.device_id,
+                envelope.session_id,
+                envelope.message_id,
+                codec,
+                sample_rate_hz,
+                _payload_string(envelope, "language"),
+                _payload_string(envelope, "voice_id"),
+                _payload_string(envelope, "tts_model") or _DEFAULT_TTS_MODEL,
+            )
         return ()
 
     def _append_chunk(self, envelope: RobotEnvelope) -> tuple[RobotEnvelope, ...]:
@@ -147,9 +164,43 @@ class VoiceMediaService:
                 )
             )
         except ConnectionError:
+            _LOGGER.warning(
+                "robot_voice_asr_failed reason=asr_unavailable device_id=%s session_id=%s "
+                "message_id=%s audio_bytes=%d audio_chunks=%d",
+                envelope.device_id,
+                envelope.session_id,
+                envelope.message_id,
+                session.size_bytes,
+                len(session.chunks),
+            )
             return (self._error(envelope, "asr_unavailable", "speech recognition is unavailable"),)
         except Exception:  # noqa: BLE001 - provider failures are a protocol boundary.
+            _LOGGER.warning(
+                "robot_voice_asr_failed reason=asr_failed device_id=%s session_id=%s "
+                "message_id=%s audio_bytes=%d audio_chunks=%d",
+                envelope.device_id,
+                envelope.session_id,
+                envelope.message_id,
+                session.size_bytes,
+                len(session.chunks),
+            )
             return (self._error(envelope, "asr_failed", "speech recognition failed"),)
+        if self._debug_voice_logs:
+            _LOGGER.info(
+                "robot_voice_asr_done device_id=%s session_id=%s message_id=%s "
+                "audio_codec=%s sample_rate_hz=%d audio_bytes=%d audio_chunks=%d "
+                "asr_text_chars=%d asr_confidence=%s asr_text_preview=%s",
+                envelope.device_id,
+                envelope.session_id,
+                envelope.message_id,
+                session.codec,
+                session.sample_rate_hz,
+                session.size_bytes,
+                len(session.chunks),
+                len(transcript.text),
+                transcript.confidence,
+                _preview(transcript.text),
+            )
         speech = build_envelope(
             message_type=RobotMessageType.SPEECH_PARTIAL,
             device_id=envelope.device_id,
@@ -163,6 +214,12 @@ class VoiceMediaService:
         try:
             responses = await self._responder(speech)
         except Exception:  # noqa: BLE001 - responder error is returned as bounded ASR-independent error.
+            _LOGGER.warning(
+                "robot_voice_responder_failed device_id=%s session_id=%s message_id=%s",
+                envelope.device_id,
+                envelope.session_id,
+                envelope.message_id,
+            )
             return (speech, self._error(envelope, "asr_failed", "speech recognition failed"))
         assistant = next(
             (
@@ -174,18 +231,67 @@ class VoiceMediaService:
             None,
         )
         if assistant is None:
+            _LOGGER.warning(
+                "robot_voice_assistant_text_missing device_id=%s session_id=%s "
+                "message_id=%s response_count=%d",
+                envelope.device_id,
+                envelope.session_id,
+                envelope.message_id,
+                len(responses),
+            )
             return (speech, *responses)
         text = str(assistant.payload["text"])[:_MAX_TTS_TEXT_CHARS]
         options = VoiceSynthesisOptions(
             voice_id=_payload_string(envelope, "voice_id") or session.voice_id,
             model=_payload_string(envelope, "tts_model") or session.tts_model,
         )
+        if self._debug_voice_logs:
+            _LOGGER.info(
+                "robot_voice_tts_start device_id=%s session_id=%s message_id=%s "
+                "tts_model=%s voice_id=%s assistant_text_chars=%d assistant_text_preview=%s",
+                envelope.device_id,
+                envelope.session_id,
+                envelope.message_id,
+                options.model,
+                options.voice_id,
+                len(text),
+                _preview(text),
+            )
         try:
             audio = await self._tts_provider.synthesize(text, options)
         except ConnectionError:
+            _LOGGER.warning(
+                "robot_voice_tts_failed reason=tts_unavailable device_id=%s "
+                "session_id=%s message_id=%s tts_model=%s voice_id=%s",
+                envelope.device_id,
+                envelope.session_id,
+                envelope.message_id,
+                options.model,
+                options.voice_id,
+            )
             return (*((speech, *responses)), self._error(envelope, "tts_unavailable", "speech synthesis is unavailable"))
         except Exception:  # noqa: BLE001 - provider failures are a protocol boundary.
+            _LOGGER.warning(
+                "robot_voice_tts_failed reason=tts_failed device_id=%s session_id=%s "
+                "message_id=%s tts_model=%s voice_id=%s",
+                envelope.device_id,
+                envelope.session_id,
+                envelope.message_id,
+                options.model,
+                options.voice_id,
+            )
             return (*((speech, *responses)), self._error(envelope, "tts_failed", "speech synthesis failed"))
+        if self._debug_voice_logs:
+            _LOGGER.info(
+                "robot_voice_tts_done device_id=%s session_id=%s message_id=%s "
+                "tts_codec=%s tts_audio_bytes=%d sample_rate_hz=%s",
+                envelope.device_id,
+                envelope.session_id,
+                envelope.message_id,
+                audio.codec,
+                len(audio.data),
+                audio.sample_rate_hz,
+            )
         payload: dict[str, object] = {
             "codec": audio.codec,
             "sequence": 1,
@@ -234,3 +340,10 @@ def _payload_string(envelope: RobotEnvelope, name: str) -> str | None:
 def _payload_positive_int(envelope: RobotEnvelope, name: str) -> int | None:
     value = envelope.payload.get(name)
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def _preview(text: str, *, max_chars: int = 160) -> str:
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= max_chars:
+        return collapsed
+    return collapsed[:max_chars].rstrip() + "..."

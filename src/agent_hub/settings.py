@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     generated_artifact_dir: Path = Path("/var/lib/agent-hub/generated-artifacts")
     litellm_health_url: str | None = None
     robot_device_tokens: SecretStr = SecretStr("")
+    robot_voice_debug_logs: bool = False
     robot_voice_media_provider: str = Field(
         default="disabled", pattern=r"^(disabled|minimax)$"
     )
